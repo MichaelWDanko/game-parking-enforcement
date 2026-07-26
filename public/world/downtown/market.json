@@ -1,0 +1,24 @@
+{
+  "id": "market",
+  "name": "Market Gate",
+  "buildings": [
+    { "side": -1, "z": -54, "width": 8, "height": 12, "depth": 10, "color": "#ef5f75", "accent": "#ffd45b" },
+    { "side": -1, "z": -42, "width": 9, "height": 9, "depth": 10, "color": "#ff9856", "accent": "#54d8c7" },
+    { "side": 1, "z": -54, "width": 9, "height": 10, "depth": 10, "color": "#5e7de6", "accent": "#ffcc62" },
+    { "side": 1, "z": -42, "width": 8, "height": 14, "depth": 10, "color": "#a36be4", "accent": "#f47cc3" }
+  ],
+  "trees": [
+    { "side": -1, "z": -56, "color": "#47b86c" },
+    { "side": -1, "z": -47, "color": "#79c85b" },
+    { "side": -1, "z": -39, "color": "#47b86c" },
+    { "side": 1, "z": -56, "color": "#79c85b" },
+    { "side": 1, "z": -47, "color": "#47b86c" },
+    { "side": 1, "z": -39, "color": "#79c85b" }
+  ],
+  "lamps": [
+    { "side": -1, "z": -52 },
+    { "side": -1, "z": -43 },
+    { "side": 1, "z": -52 },
+    { "side": 1, "z": -43 }
+  ]
+}

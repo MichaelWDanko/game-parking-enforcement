@@ -1,0 +1,38 @@
+{
+  "district": "Sunbeam Downtown",
+  "chunks": [
+    {
+      "id": "market",
+      "name": "Market Gate",
+      "centerZ": -48,
+      "file": "/world/downtown/market.json"
+    },
+    {
+      "id": "arts",
+      "name": "Arts Block",
+      "centerZ": -24,
+      "file": "/world/downtown/arts.json",
+      "initial": true
+    },
+    {
+      "id": "civic",
+      "name": "Civic Center",
+      "centerZ": 0,
+      "file": "/world/downtown/civic.json",
+      "initial": true
+    },
+    {
+      "id": "arcade",
+      "name": "Arcade Row",
+      "centerZ": 24,
+      "file": "/world/downtown/arcade.json",
+      "initial": true
+    },
+    {
+      "id": "gardens",
+      "name": "Garden Gate",
+      "centerZ": 48,
+      "file": "/world/downtown/gardens.json"
+    }
+  ]
+}

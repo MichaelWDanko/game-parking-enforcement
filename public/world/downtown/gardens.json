@@ -1,0 +1,24 @@
+{
+  "id": "gardens",
+  "name": "Garden Gate",
+  "buildings": [
+    { "side": -1, "z": 42, "width": 8, "height": 11, "depth": 10, "color": "#ff9c4c", "accent": "#48d6c8" },
+    { "side": -1, "z": 54, "width": 9, "height": 14, "depth": 10, "color": "#4f91df", "accent": "#ffd45b" },
+    { "side": 1, "z": 42, "width": 9, "height": 9, "depth": 10, "color": "#75c75b", "accent": "#f47cc3" },
+    { "side": 1, "z": 54, "width": 8, "height": 13, "depth": 10, "color": "#7667e8", "accent": "#54d8c7" }
+  ],
+  "trees": [
+    { "side": -1, "z": 40, "color": "#47b86c" },
+    { "side": -1, "z": 49, "color": "#79c85b" },
+    { "side": -1, "z": 57, "color": "#47b86c" },
+    { "side": 1, "z": 40, "color": "#79c85b" },
+    { "side": 1, "z": 49, "color": "#47b86c" },
+    { "side": 1, "z": 57, "color": "#79c85b" }
+  ],
+  "lamps": [
+    { "side": -1, "z": 44 },
+    { "side": -1, "z": 53 },
+    { "side": 1, "z": 44 },
+    { "side": 1, "z": 53 }
+  ]
+}

@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+:root {
+  --ink: #17283b;
+  --paper: #fff9ec;
+  --coral: #ff6577;
+  --yellow: #ffd45b;
+  --aqua: #48d6c8;
+  --purple: #7667e8;
+  --sky: #7bdcf4;
+  --shadow: rgba(23, 40, 59, 0.2);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--sky);
+  color: var(--ink);
+  font-family:
+    "Avenir Next Rounded", "Arial Rounded MT Bold", "Trebuchet MS", sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+button:focus-visible {
+  outline: 4px solid white;
+  outline-offset: 4px;
+}
+
+::selection {
+  background: var(--yellow);
+  color: var(--ink);
+}

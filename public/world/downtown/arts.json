@@ -1,0 +1,24 @@
+{
+  "id": "arts",
+  "name": "Arts Block",
+  "buildings": [
+    { "side": -1, "z": -30, "width": 9, "height": 15, "depth": 10, "color": "#7565e8", "accent": "#f47cc3" },
+    { "side": -1, "z": -18, "width": 8, "height": 10, "depth": 10, "color": "#49bfc4", "accent": "#ffd45b" },
+    { "side": 1, "z": -30, "width": 8, "height": 11, "depth": 10, "color": "#f47cc3", "accent": "#54d8c7" },
+    { "side": 1, "z": -18, "width": 9, "height": 14, "depth": 10, "color": "#ff8f59", "accent": "#6658d9" }
+  ],
+  "trees": [
+    { "side": -1, "z": -32, "color": "#79c85b" },
+    { "side": -1, "z": -23, "color": "#47b86c" },
+    { "side": -1, "z": -15, "color": "#79c85b" },
+    { "side": 1, "z": -32, "color": "#47b86c" },
+    { "side": 1, "z": -23, "color": "#79c85b" },
+    { "side": 1, "z": -15, "color": "#47b86c" }
+  ],
+  "lamps": [
+    { "side": -1, "z": -28 },
+    { "side": -1, "z": -19 },
+    { "side": 1, "z": -28 },
+    { "side": 1, "z": -19 }
+  ]
+}

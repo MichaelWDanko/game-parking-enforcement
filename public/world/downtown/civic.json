@@ -1,0 +1,24 @@
+{
+  "id": "civic",
+  "name": "Civic Center",
+  "buildings": [
+    { "side": -1, "z": -6, "width": 8, "height": 13, "depth": 10, "color": "#4f91df", "accent": "#ffd45b" },
+    { "side": -1, "z": 6, "width": 9, "height": 11, "depth": 10, "color": "#ff6577", "accent": "#eafcff" },
+    { "side": 1, "z": -6, "width": 9, "height": 16, "depth": 10, "color": "#48d6c8", "accent": "#6658d9" },
+    { "side": 1, "z": 6, "width": 8, "height": 10, "depth": 10, "color": "#ffad4a", "accent": "#f47cc3" }
+  ],
+  "trees": [
+    { "side": -1, "z": -8, "color": "#47b86c" },
+    { "side": -1, "z": 1, "color": "#79c85b" },
+    { "side": -1, "z": 9, "color": "#47b86c" },
+    { "side": 1, "z": -8, "color": "#79c85b" },
+    { "side": 1, "z": 1, "color": "#47b86c" },
+    { "side": 1, "z": 9, "color": "#79c85b" }
+  ],
+  "lamps": [
+    { "side": -1, "z": -4 },
+    { "side": -1, "z": 5 },
+    { "side": 1, "z": -4 },
+    { "side": 1, "z": 5 }
+  ]
+}

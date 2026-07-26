@@ -1,0 +1,24 @@
+{
+  "id": "arcade",
+  "name": "Arcade Row",
+  "buildings": [
+    { "side": -1, "z": 18, "width": 9, "height": 10, "depth": 10, "color": "#f47cc3", "accent": "#ffd45b" },
+    { "side": -1, "z": 30, "width": 8, "height": 15, "depth": 10, "color": "#6658d9", "accent": "#48d6c8" },
+    { "side": 1, "z": 18, "width": 8, "height": 12, "depth": 10, "color": "#ff765f", "accent": "#eafcff" },
+    { "side": 1, "z": 30, "width": 9, "height": 11, "depth": 10, "color": "#36b9bd", "accent": "#ffcc62" }
+  ],
+  "trees": [
+    { "side": -1, "z": 16, "color": "#79c85b" },
+    { "side": -1, "z": 25, "color": "#47b86c" },
+    { "side": -1, "z": 33, "color": "#79c85b" },
+    { "side": 1, "z": 16, "color": "#47b86c" },
+    { "side": 1, "z": 25, "color": "#79c85b" },
+    { "side": 1, "z": 33, "color": "#47b86c" }
+  ],
+  "lamps": [
+    { "side": -1, "z": 20 },
+    { "side": -1, "z": 29 },
+    { "side": 1, "z": 20 },
+    { "side": 1, "z": 29 }
+  ]
+}
