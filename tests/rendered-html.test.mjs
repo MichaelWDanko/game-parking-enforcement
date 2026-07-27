@@ -93,3 +93,50 @@ test("offers saved graphics modes and streams the city in chunks", async () => {
   assert.match(game, /city blocks ready/);
   assert.match(game, /Graphics settings/);
 });
+
+test("stores named global scores through the Sites D1 binding", async () => {
+  const [game, route, sessionRoute, server, schema, hosting] = await Promise.all([
+    readFile(new URL("app/parking-game.tsx", projectRoot), "utf8"),
+    readFile(new URL("app/api/scores/route.ts", projectRoot), "utf8"),
+    readFile(new URL("app/api/scores/session/route.ts", projectRoot), "utf8"),
+    readFile(new URL("app/api/scores/server.ts", projectRoot), "utf8"),
+    readFile(new URL("db/schema.ts", projectRoot), "utf8"),
+    readFile(new URL(".openai/hosting.json", projectRoot), "utf8"),
+  ]);
+
+  assert.equal(JSON.parse(hosting).d1, "DB");
+  assert.match(schema, /sqliteTable\(\s*"scores"/);
+  assert.match(schema, /uniqueIndex\("scores_run_id_unique"\)/);
+  assert.match(schema, /sqliteTable\(\s*"score_rate_limits"/);
+  assert.match(schema, /score_rate_limits_source_created_idx/);
+  assert.match(route, /export async function GET\(\)/);
+  assert.match(route, /export async function POST\(request: Request\)/);
+  assert.match(sessionRoute, /issueShiftSession\(request\)/);
+  assert.match(server, /SCOREBOARD_SECRET/);
+  assert.match(server, /CF-Connecting-IP/);
+  assert.match(server, /minimumSessionAgeSeconds:\s*75/);
+  assert.match(server, /maximumSessionAgeSeconds:\s*600/);
+  assert.match(server, /bodyBytes:\s*2_048/);
+  assert.match(route, /typeof value === "number"/);
+  assert.match(route, /"runId",\s*"issuedAt",\s*"token"/);
+  assert.match(route, /validated\.runId !== session\.runId/);
+  assert.match(route, /validated\.issuedAt !== session\.issuedAt/);
+  assert.match(route, /entryId:\s*String\(row\.id\)/);
+  assert.doesNotMatch(route, /runId:\s*row\.runId/);
+  assert.match(server, /maxTickets:\s*24/);
+  assert.match(route, /score_rate_limits/);
+  assert.match(route, /maxAcceptedPerHour/);
+  assert.match(route, /LIMIT -1 OFFSET \?/);
+  assert.match(route, /maximumPossibleScore/);
+  assert.doesNotMatch(route, /Number\(payload\.(?:score|tickets|boots)\)/);
+  assert.match(game, /data-testid="player-name"/);
+  assert.match(game, /aria-label="Global leaderboard"/);
+  assert.match(game, /meter-mayhem-player-name/);
+  assert.match(game, /fetchWithTimeout\("\/api\/scores\/session"/);
+  assert.match(game, /runId: gameResult\.runId/);
+  assert.match(game, /issuedAt: gameResult\.issuedAt/);
+  assert.match(game, /token: gameResult\.token/);
+  assert.match(game, /fetchWithTimeout\("\/api\/scores"/);
+  assert.match(game, /entry\.entryId === lastSavedScore\.entryId/);
+  assert.match(game, /controller\.abort\(\)/);
+});

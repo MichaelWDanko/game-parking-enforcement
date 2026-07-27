@@ -15,6 +15,10 @@ offenders before the 90-second shift ends.
 Touch controls appear on small screens. The best score is saved on the current
 device.
 
+Enter an officer name before starting a shift. Completed shifts are added to
+the global top-10 board. Global scores use the ChatGPT Sites D1 database; no
+separate server or third-party database is required.
+
 ## Graphics and world loading
 
 Choose Auto, Performance, Balanced, or Quality before a shift or from the
@@ -54,5 +58,11 @@ npm run lint
 ## Hosting
 
 The app builds for ChatGPT Sites with `npm run build`. It does not need player
-accounts or a separate backend. Publish the Site with access set to **Anyone on
-the internet** so visitors can play without ChatGPT workspace access.
+accounts or a separate backend. The Sites runtime serves the score API and
+provides the D1 database. Publish the Site with access set to **Anyone on the
+internet** so visitors can play without ChatGPT workspace access.
+
+Set `SCOREBOARD_SECRET` as a secret production environment value in Sites.
+The score API uses it to sign 90-second shift sessions and hash rate-limit
+keys. It never stores a visitor's raw network address. The API keeps only the
+top 500 results and limits each network source to 10 saved scores per hour.

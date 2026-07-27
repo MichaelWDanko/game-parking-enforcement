@@ -75,11 +75,31 @@ type CarContext = {
 } | null;
 
 type GameResult = {
+  runId: string;
+  issuedAt: number;
+  token: string;
   score: number;
   tickets: number;
   boots: number;
   best: number;
 };
+
+type ShiftSession = Pick<GameResult, "runId" | "issuedAt" | "token">;
+
+type GlobalScore = {
+  entryId: string;
+  playerName: string;
+  score: number;
+  tickets: number;
+  boots: number;
+  createdAt: string;
+};
+
+type ScoreStatus =
+  | { kind: "idle"; message: string }
+  | { kind: "saving"; message: string }
+  | { kind: "saved"; message: string }
+  | { kind: "error"; message: string };
 
 type CarData = {
   plate: string;
@@ -365,6 +385,20 @@ function resultTitle(score: number) {
   return "Rookie Patrol";
 }
 
+async function fetchWithTimeout(
+  path: string,
+  init: RequestInit = {},
+  timeoutMs = 7_000,
+) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(path, { ...init, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 export function ParkingGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const keysRef = useRef(new Set<string>());
@@ -374,29 +408,140 @@ export function ParkingGame() {
   const gameActiveRef = useRef(false);
   const audioOnRef = useRef(true);
   const applyGraphicsRef = useRef<((mode: GraphicsMode) => void) | null>(null);
+  const lastSubmittedRunRef = useRef("");
+  const submissionInFlightRef = useRef("");
+  const shiftSessionRef = useRef<ShiftSession | null>(null);
   const [screen, setScreen] = useState<Screen>("loading");
   const [loadProgress, setLoadProgress] = useState(0);
   const [stats, setStats] = useState<Stats>(INITIAL_STATS);
   const [context, setContext] = useState<CarContext>(null);
   const [toast, setToast] = useState("Find an expired meter");
-  const [result, setResult] = useState<GameResult>({ score: 0, tickets: 0, boots: 0, best: 0 });
+  const [result, setResult] = useState<GameResult>({
+    runId: "",
+    issuedAt: 0,
+    token: "",
+    score: 0,
+    tickets: 0,
+    boots: 0,
+    best: 0,
+  });
   const [audioOn, setAudioOn] = useState(true);
   const [graphicsMode, setGraphicsMode] = useState<GraphicsMode>("auto");
   const graphicsModeRef = useRef<GraphicsMode>("auto");
   const [graphicsOpen, setGraphicsOpen] = useState(false);
   const [graphicsLabel, setGraphicsLabel] = useState("Auto");
   const [streamStatus, setStreamStatus] = useState("Opening the downtown map");
+  const [playerName, setPlayerName] = useState("");
+  const [nameError, setNameError] = useState("");
+  const [globalScores, setGlobalScores] = useState<GlobalScore[]>([]);
+  const [scoresLoading, setScoresLoading] = useState(true);
+  const [scoresError, setScoresError] = useState(false);
+  const [lastSavedScore, setLastSavedScore] = useState<GlobalScore | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [scoreStatus, setScoreStatus] = useState<ScoreStatus>({
+    kind: "idle",
+    message: "Your result will be added to the global board.",
+  });
 
   useEffect(() => {
     const saved = window.localStorage.getItem("meter-mayhem-graphics") as GraphicsMode | null;
-    if (!saved || !["auto", "performance", "balanced", "quality"].includes(saved)) return;
+    const savedName = window.localStorage.getItem("meter-mayhem-player-name");
+    if (!saved && !savedName) return;
     const timer = window.setTimeout(() => {
-      graphicsModeRef.current = saved;
-      setGraphicsMode(saved);
-      applyGraphicsRef.current?.(saved);
+      if (saved && ["auto", "performance", "balanced", "quality"].includes(saved)) {
+        graphicsModeRef.current = saved;
+        setGraphicsMode(saved);
+        applyGraphicsRef.current?.(saved);
+      }
+      if (savedName) setPlayerName(savedName.slice(0, 18));
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
+
+  const refreshScores = useCallback(async () => {
+    setScoresLoading(true);
+    setScoresError(false);
+    try {
+      const response = await fetchWithTimeout("/api/scores", {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error("Scores unavailable");
+      const payload = (await response.json()) as { scores?: GlobalScore[] };
+      setGlobalScores(Array.isArray(payload.scores) ? payload.scores.slice(0, 10) : []);
+    } catch {
+      setScoresError(true);
+    } finally {
+      setScoresLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void refreshScores(), 0);
+    return () => window.clearTimeout(timer);
+  }, [refreshScores]);
+
+  const submitScore = useCallback(async (gameResult: GameResult) => {
+    if (!gameResult.token) {
+      setScoreStatus({
+        kind: "error",
+        message: "Dispatch was offline when this shift began. Your local best is still saved.",
+      });
+      return;
+    }
+    if (
+      lastSubmittedRunRef.current === gameResult.runId ||
+      submissionInFlightRef.current === gameResult.runId
+    ) {
+      return;
+    }
+
+    submissionInFlightRef.current = gameResult.runId;
+    setScoreStatus({ kind: "saving", message: "Adding your score to the global board…" });
+    try {
+      const response = await fetchWithTimeout("/api/scores", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          runId: gameResult.runId,
+          issuedAt: gameResult.issuedAt,
+          token: gameResult.token,
+          playerName,
+          score: gameResult.score,
+          tickets: gameResult.tickets,
+          boots: gameResult.boots,
+        }),
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        rank?: number;
+        score?: GlobalScore;
+      };
+      if (!response.ok) throw new Error(payload.error ?? "Score not saved");
+      lastSubmittedRunRef.current = gameResult.runId;
+      if (payload.score) setLastSavedScore(payload.score);
+      setScoreStatus({
+        kind: "saved",
+        message: payload.rank ? `Saved globally · rank #${payload.rank}` : "Saved globally",
+      });
+      await refreshScores();
+    } catch {
+      setScoreStatus({
+        kind: "error",
+        message: "The score did not save. Your local best is safe.",
+      });
+    } finally {
+      if (submissionInFlightRef.current === gameResult.runId) {
+        submissionInFlightRef.current = "";
+      }
+    }
+  }, [playerName, refreshScores]);
+
+  useEffect(() => {
+    if (screen !== "gameover" || !result.runId) return;
+    const timer = window.setTimeout(() => void submitScore(result), 0);
+    return () => window.clearTimeout(timer);
+  }, [result, screen, submitScore]);
 
   useEffect(() => {
     gameActiveRef.current = screen === "playing";
@@ -898,7 +1043,16 @@ export function ParkingGame() {
       const previousBest = Number(window.localStorage.getItem("meter-mayhem-best") ?? 0);
       const best = Math.max(previousBest, score);
       window.localStorage.setItem("meter-mayhem-best", String(best));
-      setResult({ score, tickets, boots, best });
+      const session = shiftSessionRef.current;
+      setResult({
+        runId: session?.runId ?? crypto.randomUUID(),
+        issuedAt: session?.issuedAt ?? 0,
+        token: session?.token ?? "",
+        score,
+        tickets,
+        boots,
+        best,
+      });
       setScreen("gameover");
       playTone(392, 0.16);
       window.setTimeout(() => playTone(523, 0.3), 130);
@@ -927,6 +1081,11 @@ export function ParkingGame() {
       pushStats();
       setContext(null);
       setToast("Find an expired meter");
+      setLastSavedScore(null);
+      setScoreStatus({
+        kind: "idle",
+        message: "Your result will be added to the global board.",
+      });
       gameActiveRef.current = true;
       setScreen("playing");
       playTone(440, 0.08, "square");
@@ -1254,7 +1413,46 @@ export function ParkingGame() {
     else keysRef.current.delete(code);
   }, []);
 
-  const start = () => startRef.current?.();
+  const start = async () => {
+    if (starting) return;
+    const normalizedName = playerName.trim().replace(/\s+/g, " ");
+    if (
+      normalizedName.length < 2 ||
+      normalizedName.length > 18 ||
+      !/^[\p{L}\p{N} ._'-]+$/u.test(normalizedName)
+    ) {
+      setNameError("Use 2–18 letters, numbers, spaces, or . _ ' -");
+      if (screen !== "home") setScreen("home");
+      return;
+    }
+    setNameError("");
+    setPlayerName(normalizedName);
+    window.localStorage.setItem("meter-mayhem-player-name", normalizedName);
+    setStarting(true);
+    shiftSessionRef.current = null;
+    try {
+      const response = await fetchWithTimeout("/api/scores/session", {
+        method: "POST",
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) throw new Error("Dispatch unavailable");
+      const payload = (await response.json()) as { session?: ShiftSession };
+      if (
+        !payload.session ||
+        typeof payload.session.runId !== "string" ||
+        typeof payload.session.issuedAt !== "number" ||
+        typeof payload.session.token !== "string"
+      ) {
+        throw new Error("Invalid shift session");
+      }
+      shiftSessionRef.current = payload.session;
+    } catch {
+      shiftSessionRef.current = null;
+    } finally {
+      setStarting(false);
+    }
+    startRef.current?.();
+  };
   const act = (kind: ActionKind) => actionsRef.current?.(kind);
 
   return (
@@ -1298,6 +1496,31 @@ export function ParkingGame() {
                 </p>
               </div>
             </div>
+            <div className={styles.playerIdentity}>
+              <label htmlFor="player-name">
+                <span>Officer name</span>
+                <input
+                  id="player-name"
+                  data-testid="player-name"
+                  value={playerName}
+                  maxLength={18}
+                  autoComplete="nickname"
+                  spellCheck={false}
+                  placeholder="Enter your name"
+                  onChange={(event) => {
+                    setPlayerName(event.target.value);
+                    setNameError("");
+                  }}
+                  aria-describedby={nameError ? "player-name-error" : undefined}
+                  aria-invalid={Boolean(nameError)}
+                />
+              </label>
+              <div>
+                <b>GLOBAL SCORES</b>
+                <small>Saved after each shift</small>
+              </div>
+              {nameError && <p id="player-name-error" role="alert">{nameError}</p>}
+            </div>
             <div className={styles.graphicsPicker}>
               <div className={styles.graphicsHeading}>
                 <span>Graphics mode</span>
@@ -1317,8 +1540,13 @@ export function ParkingGame() {
                 ))}
               </div>
             </div>
-            <button className={styles.primaryButton} onClick={start} data-testid="start-game">
-              Help Officer Graham <span>→</span>
+            <button
+              className={styles.primaryButton}
+              onClick={() => void start()}
+              data-testid="start-game"
+              disabled={starting}
+            >
+              {starting ? "Calling dispatch…" : "Help Officer Graham"} <span>→</span>
             </button>
             <p className={styles.shiftNote}>90-second shift · Best score wins</p>
           </div>
@@ -1499,24 +1727,75 @@ export function ParkingGame() {
           <div className={styles.confetti} aria-hidden="true">
             {Array.from({ length: 18 }, (_, index) => <i key={index} />)}
           </div>
-          <div className={styles.resultCard}>
-            <p className={styles.eyebrow}>SHIFT COMPLETE</p>
-            <h1>{resultTitle(result.score)}</h1>
-            <p className={styles.resultLead}>The block is safer, the meters are calmer, and your ticket book is considerably lighter.</p>
-            <div className={styles.finalScore}>
-              <span>Final score</span>
-              <strong data-testid="final-score">{result.score.toLocaleString()}</strong>
-              {result.score >= result.best && result.score > 0 && <b>NEW BEST!</b>}
+          <div className={styles.resultsWrap}>
+            <div className={styles.resultCard}>
+              <p className={styles.eyebrow}>SHIFT COMPLETE</p>
+              <h1>{resultTitle(result.score)}</h1>
+              <p className={styles.resultLead}>The block is safer, the meters are calmer, and your ticket book is considerably lighter.</p>
+              <div className={styles.finalScore}>
+                <span>{playerName}&apos;s final score</span>
+                <strong data-testid="final-score">{result.score.toLocaleString()}</strong>
+                {result.score >= result.best && result.score > 0 && <b>NEW BEST!</b>}
+              </div>
+              <div className={styles.resultStats}>
+                <div><strong>{result.tickets}</strong><span>Tickets</span></div>
+                <div><strong>{result.boots}</strong><span>Boots</span></div>
+                <div><strong>{result.best.toLocaleString()}</strong><span>Local best</span></div>
+              </div>
+              <div className={styles.scoreStatus} data-kind={scoreStatus.kind} aria-live="polite">
+                <span>{scoreStatus.message}</span>
+                {scoreStatus.kind === "error" && result.token && (
+                  <button onClick={() => void submitScore(result)}>Retry score</button>
+                )}
+              </div>
+              <button
+                className={styles.primaryButton}
+                onClick={() => void start()}
+                data-testid="play-again"
+                disabled={starting}
+              >
+                {starting ? "Calling dispatch…" : "Patrol again"} <span>↻</span>
+              </button>
+              <button className={styles.textButton} onClick={() => setScreen("home")}>Back to instructions</button>
             </div>
-            <div className={styles.resultStats}>
-              <div><strong>{result.tickets}</strong><span>Tickets</span></div>
-              <div><strong>{result.boots}</strong><span>Boots</span></div>
-              <div><strong>{result.best.toLocaleString()}</strong><span>Best</span></div>
-            </div>
-            <button className={styles.primaryButton} onClick={start} data-testid="play-again">
-              Patrol again <span>↻</span>
-            </button>
-            <button className={styles.textButton} onClick={() => setScreen("home")}>Back to instructions</button>
+
+            <aside className={styles.leaderboard} aria-label="Global leaderboard">
+              <header>
+                <div>
+                  <span>Citywide</span>
+                  <h2>Top officers</h2>
+                </div>
+                <b>GLOBAL</b>
+              </header>
+              {scoresLoading && globalScores.length === 0 ? (
+                <p className={styles.boardMessage}>Calling dispatch…</p>
+              ) : scoresError && globalScores.length === 0 ? (
+                <p className={styles.boardMessage}>Dispatch could not load global scores.</p>
+              ) : globalScores.length > 0 ? (
+                <ol>
+                  {globalScores.map((entry, index) => (
+                    <li
+                      key={entry.entryId}
+                      data-player={
+                        lastSavedScore && entry.entryId === lastSavedScore.entryId
+                          ? "current"
+                          : undefined
+                      }
+                    >
+                      <i>{index + 1}</i>
+                      <div>
+                        <strong>{entry.playerName}</strong>
+                        <small>{entry.tickets} tickets · {entry.boots} boots</small>
+                      </div>
+                      <b>{entry.score.toLocaleString()}</b>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className={styles.boardMessage}>No global scores yet. Take the first spot.</p>
+              )}
+              <button onClick={() => void refreshScores()}>Refresh scores</button>
+            </aside>
           </div>
         </section>
       )}
