@@ -30,6 +30,10 @@ blocks load as Officer Graham approaches them. World data lives in small JSON
 chunks under `public/world/downtown`, so the game can grow without one large
 initial download.
 
+Main Street now connects to Civic Avenue, Garden Lane, and Garden Plaza. Cars
+park and travel in both street directions. Buildings that cross the camera
+sightline hide until the officer is visible again.
+
 ## Scoring
 
 - Valid ticket: 100 points, with a quick-ticket combo bonus.

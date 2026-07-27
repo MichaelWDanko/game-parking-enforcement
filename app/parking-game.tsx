@@ -118,6 +118,7 @@ type CarData = {
 };
 
 type ParkingSpot = {
+  axis: "x" | "z";
   x: number;
   z: number;
   side: number;
@@ -575,8 +576,8 @@ export function ParkingGame() {
     scene.background = new THREE.Color(0x7bdcf4);
     scene.fog = new THREE.Fog(0x8de3f4, initialProfile.fogNear, initialProfile.fogFar);
 
-    const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 150);
-    camera.position.set(19, 20, 24);
+    const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 180);
+    camera.position.set(14, 21, 19);
     const cameraTarget = new THREE.Vector3(0, 0, 7);
 
     const hemi = new THREE.HemisphereLight(0xfff1bf, 0x7f87c7, 2.4);
@@ -595,7 +596,7 @@ export function ParkingGame() {
     scene.add(world);
 
     const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(90, 138),
+      new THREE.PlaneGeometry(116, 150),
       new THREE.MeshStandardMaterial({ color: 0x88c96e, roughness: 1 }),
     );
     ground.rotation.x = -Math.PI / 2;
@@ -603,14 +604,16 @@ export function ParkingGame() {
     ground.receiveShadow = true;
     world.add(ground);
 
-    const road = new THREE.Mesh(
+    const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x52657b, roughness: 0.96 });
+    const mainRoad = new THREE.Mesh(
       new THREE.PlaneGeometry(13.8, 112),
-      new THREE.MeshStandardMaterial({ color: 0x52657b, roughness: 0.96 }),
+      roadMaterial,
     );
-    road.rotation.x = -Math.PI / 2;
-    road.position.y = 0;
-    road.receiveShadow = true;
-    world.add(road);
+    mainRoad.rotation.x = -Math.PI / 2;
+    mainRoad.position.y = 0;
+    mainRoad.receiveShadow = true;
+    mainRoad.name = "Main Street";
+    world.add(mainRoad);
 
     const sidewalkMaterial = new THREE.MeshStandardMaterial({ color: 0xffc987, roughness: 1 });
     for (const x of [-9.25, 9.25]) {
@@ -628,27 +631,177 @@ export function ParkingGame() {
       world.add(stripe);
     }
 
+    const sideRoads = [
+      { name: "Civic Avenue", z: 0, width: 100 },
+      { name: "Garden Lane", z: 32, width: 76 },
+    ];
+    for (const sideRoad of sideRoads) {
+      const road = new THREE.Mesh(
+        new THREE.PlaneGeometry(sideRoad.width, 13.8),
+        roadMaterial,
+      );
+      road.rotation.x = -Math.PI / 2;
+      road.position.set(0, 0.006, sideRoad.z);
+      road.receiveShadow = true;
+      road.name = sideRoad.name;
+      world.add(road);
+
+      for (const zOffset of [-9.25, 9.25]) {
+        const sidewalk = new THREE.Mesh(
+          new THREE.BoxGeometry(sideRoad.width, 0.24, 4.6),
+          sidewalkMaterial,
+        );
+        sidewalk.position.set(0, 0.08, sideRoad.z + zOffset);
+        sidewalk.receiveShadow = true;
+        world.add(sidewalk);
+      }
+
+      for (let x = -sideRoad.width / 2 + 4; x <= sideRoad.width / 2 - 4; x += 8) {
+        if (Math.abs(x) < 9) continue;
+        const stripe = new THREE.Mesh(new THREE.PlaneGeometry(3.9, 0.18), stripeMaterial);
+        stripe.rotation.x = -Math.PI / 2;
+        stripe.position.set(x, 0.018, sideRoad.z);
+        world.add(stripe);
+      }
+    }
+
+    const plaza = new THREE.Mesh(
+      new THREE.BoxGeometry(30, 0.18, 18),
+      new THREE.MeshStandardMaterial({ color: 0xf6dca7, roughness: 0.95 }),
+    );
+    plaza.position.set(29, 0.04, 46);
+    plaza.receiveShadow = true;
+    plaza.name = "Garden Plaza";
+    world.add(plaza);
+
+    const fountain = new THREE.Group();
+    const fountainStone = new THREE.MeshStandardMaterial({ color: 0xe8f1ef, roughness: 0.72 });
+    const fountainWater = new THREE.MeshStandardMaterial({
+      color: 0x54d5ee,
+      emissive: 0x198fae,
+      emissiveIntensity: 0.35,
+      roughness: 0.18,
+    });
+    const fountainBase = new THREE.Mesh(
+      new THREE.CylinderGeometry(3.2, 3.5, 0.6, 24),
+      fountainStone,
+    );
+    fountainBase.position.y = 0.35;
+    const fountainPool = new THREE.Mesh(
+      new THREE.CylinderGeometry(2.75, 2.75, 0.12, 24),
+      fountainWater,
+    );
+    fountainPool.position.y = 0.7;
+    const fountainColumn = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.4, 0.75, 2.4, 16),
+      fountainStone,
+    );
+    fountainColumn.position.y = 1.7;
+    const fountainTop = new THREE.Mesh(
+      new THREE.SphereGeometry(0.55, 16, 10),
+      fountainWater,
+    );
+    fountainTop.position.y = 3.1;
+    fountain.add(fountainBase, fountainPool, fountainColumn, fountainTop);
+    fountain.position.set(30, 0.14, 47);
+    addShadow(fountain);
+    world.add(fountain);
+
     const animatedTrees: THREE.Group[] = [];
     const qualityDetails: THREE.Object3D[] = [];
+    const cameraOccluders: THREE.Group[] = [];
+    const cameraRaycaster = new THREE.Raycaster();
+    const cameraFocus = new THREE.Vector3();
+    const cameraRay = new THREE.Vector3();
     const loadedChunks = new Map<string, THREE.Group>();
     const loadingChunks = new Set<string>();
     let chunkManifest: WorldManifest | null = null;
     let disposed = false;
+
+    const registerCameraOccluder = (group: THREE.Group) => {
+      group.userData.cameraOccluder = true;
+      cameraOccluders.push(group);
+    };
+
+    const isCrossStreetZ = (z: number) =>
+      Math.abs(z) <= 11 || Math.abs(z - 32) <= 10;
+
+    const addDistrictBuilding = (
+      x: number,
+      z: number,
+      width: number,
+      height: number,
+      depth: number,
+      color: number,
+      accent: number,
+    ) => {
+      const group = new THREE.Group();
+      const building = roundedBox(width, height, depth, color);
+      building.position.y = height / 2;
+      const crown = roundedBox(width * 0.7, 0.5, depth * 0.7, accent, 0.7);
+      crown.position.y = height + 0.18;
+      const awning = roundedBox(width * 0.68, 0.34, 1.1, accent);
+      awning.position.set(0, 2.2, -depth / 2 - 0.18);
+      awning.rotation.x = -0.16;
+      group.add(building, crown, awning);
+
+      const windowMaterial = new THREE.MeshStandardMaterial({
+        color: 0xeafcff,
+        emissive: 0x6ad5e3,
+        emissiveIntensity: 0.45,
+        roughness: 0.28,
+      });
+      const floorCount = Math.max(2, Math.floor(height / 2.8));
+      for (let floor = 0; floor < floorCount; floor++) {
+        for (const offset of [-width * 0.26, width * 0.26]) {
+          const windowMesh = new THREE.Mesh(
+            new THREE.PlaneGeometry(Math.min(1.3, width * 0.22), 1.25),
+            windowMaterial,
+          );
+          windowMesh.position.set(offset, 3 + floor * 2.3, -depth / 2 - 0.012);
+          windowMesh.rotation.y = Math.PI;
+          group.add(windowMesh);
+          qualityDetails.push(windowMesh);
+        }
+      }
+
+      group.position.set(x, 0, z);
+      addShadow(group);
+      registerCameraOccluder(group);
+      world.add(group);
+    };
+
+    [
+      [-39, -17, 11, 13, 9, 0xff6577, 0xffd45b],
+      [-24, -17, 10, 10, 9, 0x4f91df, 0x48d6c8],
+      [24, -17, 10, 15, 9, 0x7667e8, 0xf47cc3],
+      [39, -17, 11, 11, 9, 0xffad4a, 0xeafcff],
+      [-39, 17, 11, 12, 9, 0x48d6c8, 0x6658d9],
+      [-24, 17, 10, 16, 9, 0xff8b5c, 0xffd45b],
+      [24, 17, 10, 11, 9, 0x4f91df, 0xeafcff],
+      [39, 17, 11, 14, 9, 0xf47cc3, 0x48d6c8],
+      [-32, 48, 12, 13, 10, 0x7667e8, 0xffd45b],
+      [-18, 48, 10, 10, 10, 0x48d6c8, 0xeafcff],
+    ].forEach(([x, z, width, height, depth, color, accent]) => {
+      addDistrictBuilding(x, z, width, height, depth, color, accent);
+    });
 
     const createCityChunk = (data: WorldChunkData) => {
       const chunk = new THREE.Group();
       chunk.name = `city-chunk-${data.id}`;
 
       for (const item of data.buildings) {
+        if (isCrossStreetZ(item.z)) continue;
         const color = Number.parseInt(item.color.replace("#", ""), 16);
         const accent = Number.parseInt(item.accent.replace("#", ""), 16);
+        const buildingGroup = new THREE.Group();
         const building = roundedBox(item.width, item.height, item.depth, color);
         building.position.set(item.side * 17, item.height / 2, item.z);
-        chunk.add(building);
+        buildingGroup.add(building);
 
         const crown = roundedBox(item.width * 0.72, 0.5, item.depth * 0.72, accent, 0.7);
         crown.position.set(item.side * 17, item.height + 0.18, item.z);
-        chunk.add(crown);
+        buildingGroup.add(crown);
 
         const awning = roundedBox(item.width * 0.68, 0.32, 1.2, accent);
         awning.position.set(
@@ -657,7 +810,7 @@ export function ParkingGame() {
           item.z,
         );
         awning.rotation.z = item.side * -0.18;
-        chunk.add(awning);
+        buildingGroup.add(awning);
 
         const windowMaterial = new THREE.MeshStandardMaterial({
           color: 0xeafcff,
@@ -676,14 +829,17 @@ export function ParkingGame() {
               item.z + offset,
             );
             windowMesh.rotation.y = item.side > 0 ? -Math.PI / 2 : Math.PI / 2;
-            chunk.add(windowMesh);
+            buildingGroup.add(windowMesh);
             qualityDetails.push(windowMesh);
           }
         }
-        addShadow(building);
+        addShadow(buildingGroup);
+        registerCameraOccluder(buildingGroup);
+        chunk.add(buildingGroup);
       }
 
       for (const item of data.trees) {
+        if (isCrossStreetZ(item.z)) continue;
         const tree = new THREE.Group();
         const trunk = new THREE.Mesh(
           new THREE.CylinderGeometry(0.16, 0.24, 1.7, 8),
@@ -707,6 +863,7 @@ export function ParkingGame() {
       }
 
       for (const item of data.lamps) {
+        if (isCrossStreetZ(item.z)) continue;
         const lamp = new THREE.Group();
         const pole = new THREE.Mesh(
           new THREE.CylinderGeometry(0.07, 0.11, 3.9, 10),
@@ -804,8 +961,8 @@ export function ParkingGame() {
         puff.scale.setScalar(scale);
         cloud.add(puff);
       }
-      cloud.position.set(-28 + index * 9, 17 + (index % 3) * 2.2, -42 + index * 15);
-      cloud.scale.setScalar(1.2 + (index % 2) * 0.5);
+      cloud.position.set(-28 + index * 9, 28 + (index % 3) * 2.5, -42 + index * 15);
+      cloud.scale.setScalar(1.1 + (index % 2) * 0.35);
       clouds.push(cloud);
       qualityDetails.push(cloud);
       world.add(cloud);
@@ -832,27 +989,66 @@ export function ParkingGame() {
     world.add(motes);
 
     const spots: ParkingSpot[] = [];
-    for (const side of [-1, 1]) {
-      for (const z of [-27, -9, 9, 27]) {
+    const addParkingSpot = (axis: "x" | "z", side: number, along: number) => {
+      if (axis === "z") {
         const meter = createMeter(side);
-        meter.group.position.set(side * 7.4, 0.2, z + 2.3);
+        meter.group.position.set(side * 7.4, 0.2, along + 2.3);
         world.add(meter.group);
-        spots.push({ x: side * 5.35, z, side, meterLight: meter.light, car: null, respawnAt: 0 });
+        spots.push({
+          axis,
+          x: side * 5.35,
+          z: along,
+          side,
+          meterLight: meter.light,
+          car: null,
+          respawnAt: 0,
+        });
 
         const marking = new THREE.LineSegments(
           new THREE.EdgesGeometry(new THREE.BoxGeometry(2.8, 0.02, 6.8)),
           new THREE.LineBasicMaterial({ color: 0xf7e9a7 }),
         );
-        marking.position.set(side * 5.35, 0.025, z);
+        marking.position.set(side * 5.35, 0.025, along);
         world.add(marking);
+        return;
       }
+
+      const meter = createMeter(side);
+      meter.group.rotation.y = Math.PI / 2;
+      meter.group.position.set(along + 2.3, 0.2, side * 7.4);
+      world.add(meter.group);
+      spots.push({
+        axis,
+        x: along,
+        z: side * 5.35,
+        side,
+        meterLight: meter.light,
+        car: null,
+        respawnAt: 0,
+      });
+
+      const marking = new THREE.LineSegments(
+        new THREE.EdgesGeometry(new THREE.BoxGeometry(6.8, 0.02, 2.8)),
+        new THREE.LineBasicMaterial({ color: 0xf7e9a7 }),
+      );
+      marking.position.set(along, 0.025, side * 5.35);
+      world.add(marking);
+    };
+
+    for (const side of [-1, 1]) {
+      for (const z of [-36, -12, 12, 36]) addParkingSpot("z", side, z);
+      for (const x of [-35, -18, 18, 35]) addParkingSpot("x", side, x);
     }
 
     const officer = createOfficer();
     officer.root.position.set(-8.5, 0.15, -9);
     world.add(officer.root);
 
-    const movingCars: { group: THREE.Group; speed: number; lane: number }[] = [];
+    const movingCars: {
+      group: THREE.Group;
+      speed: number;
+      axis: "x" | "z";
+    }[] = [];
     for (let i = 0; i < 6; i++) {
       const group = createCar(CAR_COLORS[(i + 2) % CAR_COLORS.length]);
       group.scale.setScalar(0.82);
@@ -860,7 +1056,21 @@ export function ParkingGame() {
       group.position.set(lane, 0.08, -50 + i * 20);
       if (lane > 0) group.rotation.y = Math.PI;
       world.add(group);
-      movingCars.push({ group, speed: lane < 0 ? 5.2 + i * 0.45 : -(5.2 + i * 0.45), lane });
+      movingCars.push({
+        group,
+        speed: lane < 0 ? 5.2 + i * 0.45 : -(5.2 + i * 0.45),
+        axis: "z",
+      });
+    }
+    for (let i = 0; i < 4; i++) {
+      const group = createCar(CAR_COLORS[(i + 4) % CAR_COLORS.length]);
+      group.scale.setScalar(0.82);
+      const lane = i % 2 === 0 ? -1.9 : 1.9;
+      const speed = lane < 0 ? 5.6 + i * 0.4 : -(5.6 + i * 0.4);
+      group.position.set(-48 + i * 30, 0.08, lane);
+      group.rotation.y = speed > 0 ? Math.PI / 2 : -Math.PI / 2;
+      world.add(group);
+      movingCars.push({ group, speed, axis: "x" });
     }
 
     const applyGraphics = (mode: GraphicsMode) => {
@@ -950,6 +1160,12 @@ export function ParkingGame() {
     let fpsTime = 0;
     let lastStreamCheck = 0;
 
+    const isWalkable = (x: number, z: number) =>
+      (Math.abs(x) <= 11.2 && Math.abs(z) <= 54) ||
+      (Math.abs(z) <= 11.2 && Math.abs(x) <= 49) ||
+      (Math.abs(z - 32) <= 10 && Math.abs(x) <= 38) ||
+      (x >= 14 && x <= 44 && z >= 36 && z <= 54);
+
     const audioContextRef: { value: AudioContext | null } = { value: null };
     const playTone = (frequency: number, duration: number, type: OscillatorType = "sine") => {
       if (!audioOnRef.current) return;
@@ -981,8 +1197,12 @@ export function ParkingGame() {
     const spawnCar = (spot: ParkingSpot, initial = false) => {
       const color = CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)];
       const group = createCar(color);
-      group.position.set(spot.x, 0.08, initial ? spot.z : -43);
-      group.rotation.y = 0;
+      group.position.set(
+        initial || spot.axis === "z" ? spot.x : -52,
+        0.08,
+        initial || spot.axis === "x" ? spot.z : -52,
+      );
+      group.rotation.y = spot.axis === "x" ? Math.PI / 2 : 0;
       world.add(group);
       const priorsPool = [0, 0, 1, 2, 3, 4, 5];
       const overdue = initial && Math.random() < 0.46;
@@ -1002,14 +1222,14 @@ export function ParkingGame() {
     };
 
     spots.forEach((spot, index) => {
-      if (index < 6) {
+      if (index < 12) {
         spawnCar(spot, true);
         if (index === 1 && spot.car) {
           spot.car.expireAt = gameTime - 4;
           spot.car.priors = 4;
         }
       }
-      else spot.respawnAt = index === 6 ? 5 : 11;
+      else spot.respawnAt = 4 + (index % 4) * 2;
     });
 
     const pushStats = () => {
@@ -1069,14 +1289,14 @@ export function ParkingGame() {
       officer.root.position.set(-8.5, 0.15, -9);
       officer.root.rotation.y = 0;
       spots.forEach((spot, index) => {
-        if (index < 6) {
+        if (index < 12) {
           spawnCar(spot, true);
           if (index === 1 && spot.car) {
             spot.car.expireAt = gameTime - 4;
             spot.car.priors = 4;
           }
         }
-        else spot.respawnAt = index === 6 ? 4 : 9;
+        else spot.respawnAt = 4 + (index % 4) * 2;
       });
       pushStats();
       setContext(null);
@@ -1217,6 +1437,33 @@ export function ParkingGame() {
     observer.observe(canvas);
     resize();
 
+    const updateCameraOcclusion = () => {
+      const activeOccluders = new Set<THREE.Group>();
+      cameraFocus.set(cameraTarget.x, 1.35, cameraTarget.z - 0.6);
+      cameraRay.subVectors(camera.position, cameraFocus);
+      const cameraDistance = cameraRay.length();
+      if (cameraDistance > 1) {
+        world.updateMatrixWorld(true);
+        cameraRaycaster.set(cameraFocus, cameraRay.normalize());
+        cameraRaycaster.far = cameraDistance - 0.75;
+        const intersections = cameraRaycaster.intersectObjects(cameraOccluders, true);
+        for (const intersection of intersections) {
+          let object: THREE.Object3D | null = intersection.object;
+          while (object && object !== world) {
+            if (object.userData.cameraOccluder) {
+              activeOccluders.add(object as THREE.Group);
+              break;
+            }
+            object = object.parent;
+          }
+        }
+      }
+
+      for (const group of cameraOccluders) {
+        group.visible = !activeOccluders.has(group);
+      }
+    };
+
     const render = () => {
       if (disposed) return;
       requestAnimationFrame(render);
@@ -1234,9 +1481,14 @@ export function ParkingGame() {
       }
 
       for (const traffic of movingCars) {
-        traffic.group.position.z += traffic.speed * dt;
-        if (traffic.group.position.z > 58) traffic.group.position.z = -58;
-        if (traffic.group.position.z < -58) traffic.group.position.z = 58;
+        const coordinate = traffic.axis === "z" ? "z" : "x";
+        traffic.group.position[coordinate] += traffic.speed * dt;
+        if (traffic.group.position[coordinate] > 58) {
+          traffic.group.position[coordinate] = -58;
+        }
+        if (traffic.group.position[coordinate] < -58) {
+          traffic.group.position[coordinate] = 58;
+        }
       }
       clouds.forEach((cloud, index) => {
         cloud.position.x += (0.12 + index * 0.014) * dt;
@@ -1273,13 +1525,19 @@ export function ParkingGame() {
         if (length > 0) {
           const moveX = inputX / length;
           const moveZ = inputZ / length;
-          officer.root.position.x += moveX * runningSpeed * dt;
-          officer.root.position.z += moveZ * runningSpeed * dt;
+          const nextX = officer.root.position.x + moveX * runningSpeed * dt;
+          const nextZ = officer.root.position.z + moveZ * runningSpeed * dt;
+          if (isWalkable(nextX, nextZ)) {
+            officer.root.position.x = nextX;
+            officer.root.position.z = nextZ;
+          } else if (isWalkable(nextX, officer.root.position.z)) {
+            officer.root.position.x = nextX;
+          } else if (isWalkable(officer.root.position.x, nextZ)) {
+            officer.root.position.z = nextZ;
+          }
           const targetAngle = Math.atan2(moveX, moveZ);
           officer.root.rotation.y = dampAngle(officer.root.rotation.y, targetAngle, 13, dt);
         }
-        officer.root.position.x = THREE.MathUtils.clamp(officer.root.position.x, -11.2, 11.2);
-        officer.root.position.z = THREE.MathUtils.clamp(officer.root.position.z, -50, 50);
 
         spots.forEach((spot) => {
           const car = spot.car;
@@ -1291,7 +1549,11 @@ export function ParkingGame() {
           if (car.phase === "arriving") {
             const progress = Math.min(1, car.phaseTime / 2.2);
             const eased = 1 - Math.pow(1 - progress, 3);
-            car.group.position.z = THREE.MathUtils.lerp(-43, spot.z, eased);
+            if (spot.axis === "z") {
+              car.group.position.z = THREE.MathUtils.lerp(-52, spot.z, eased);
+            } else {
+              car.group.position.x = THREE.MathUtils.lerp(-52, spot.x, eased);
+            }
             if (progress >= 1) {
               car.phase = "parked";
               car.phaseTime = 0;
@@ -1306,7 +1568,11 @@ export function ParkingGame() {
           } else {
             const progress = Math.min(1, car.phaseTime / 2.4);
             const eased = progress * progress;
-            car.group.position.z = THREE.MathUtils.lerp(spot.z, 43, eased);
+            if (spot.axis === "z") {
+              car.group.position.z = THREE.MathUtils.lerp(spot.z, 52, eased);
+            } else {
+              car.group.position.x = THREE.MathUtils.lerp(spot.x, 52, eased);
+            }
             if (progress >= 1) removeCar(spot);
           }
           const meterMaterial = spot.meterLight.material as THREE.MeshStandardMaterial;
@@ -1378,11 +1644,16 @@ export function ParkingGame() {
 
       cameraTarget.x = damp(cameraTarget.x, officer.root.position.x, 4.2, dt);
       cameraTarget.z = damp(cameraTarget.z, officer.root.position.z, 4.2, dt);
-      const desiredCamera = new THREE.Vector3(cameraTarget.x + 17, 19, cameraTarget.z + 22);
+      const desiredCamera = new THREE.Vector3(
+        cameraTarget.x + 13.5,
+        20.5,
+        cameraTarget.z + 18,
+      );
       camera.position.lerp(desiredCamera, 1 - Math.exp(-3.5 * dt));
       camera.lookAt(cameraTarget.x, 1.3, cameraTarget.z - 1);
 
       world.rotation.y = gameActiveRef.current ? 0 : Math.sin(elapsed * 0.18) * 0.025;
+      updateCameraOcclusion();
       renderer.render(scene, camera);
     };
     render();
@@ -1560,8 +1831,8 @@ export function ParkingGame() {
               <li>
                 <i>1</i>
                 <div>
-                  <strong>Patrol the block</strong>
-                  <span>Move with WASD or arrow keys. Hold Shift to run.</span>
+                  <strong>Explore downtown</strong>
+                  <span>Patrol Main Street, Civic Avenue, Garden Lane, and the plaza.</span>
                 </div>
               </li>
               <li>

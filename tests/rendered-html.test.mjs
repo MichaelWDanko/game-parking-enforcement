@@ -94,6 +94,24 @@ test("offers saved graphics modes and streams the city in chunks", async () => {
   assert.match(game, /Graphics settings/);
 });
 
+test("opens connected side streets and keeps the officer visible", async () => {
+  const game = await readFile(
+    new URL("app/parking-game.tsx", projectRoot),
+    "utf8",
+  );
+
+  assert.match(game, /name: "Civic Avenue"/);
+  assert.match(game, /name: "Garden Lane"/);
+  assert.match(game, /plaza\.name = "Garden Plaza"/);
+  assert.match(game, /const isWalkable = \(x: number, z: number\)/);
+  assert.match(game, /addParkingSpot\("x", side, x\)/);
+  assert.match(game, /spot\.axis === "x"/);
+  assert.match(game, /cameraRaycaster\.intersectObjects\(cameraOccluders, true\)/);
+  assert.match(game, /group\.visible = !activeOccluders\.has\(group\)/);
+  assert.match(game, /28 \+ \(index % 3\) \* 2\.5/);
+  assert.doesNotMatch(game, /clamp\(officer\.root\.position\.x, -11\.2, 11\.2\)/);
+});
+
 test("stores named global scores through the Sites D1 binding", async () => {
   const [game, route, sessionRoute, server, schema, hosting] = await Promise.all([
     readFile(new URL("app/parking-game.tsx", projectRoot), "utf8"),
