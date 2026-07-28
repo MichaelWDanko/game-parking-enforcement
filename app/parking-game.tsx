@@ -6,6 +6,7 @@ import styles from "./parking-game.module.css";
 
 type Screen = "loading" | "home" | "playing" | "gameover";
 type ActionKind = "ticket" | "lookup" | "boot";
+type KeyboardScheme = "arrows" | "wasd";
 type GraphicsMode = "auto" | "performance" | "balanced" | "quality";
 
 type GraphicsProfile = {
@@ -112,6 +113,7 @@ type CarData = {
   lookedUp: boolean;
   phase: "arriving" | "parked" | "leaving";
   phaseTime: number;
+  driveRate: number;
   group: THREE.Group;
   ticketMesh?: THREE.Mesh;
   bootMesh?: THREE.Mesh;
@@ -1047,6 +1049,7 @@ export function ParkingGame() {
     const movingCars: {
       group: THREE.Group;
       speed: number;
+      cruiseSpeed: number;
       axis: "x" | "z";
     }[] = [];
     for (let i = 0; i < 6; i++) {
@@ -1056,11 +1059,8 @@ export function ParkingGame() {
       group.position.set(lane, 0.08, -50 + i * 20);
       if (lane > 0) group.rotation.y = Math.PI;
       world.add(group);
-      movingCars.push({
-        group,
-        speed: lane < 0 ? 5.2 + i * 0.45 : -(5.2 + i * 0.45),
-        axis: "z",
-      });
+      const cruiseSpeed = lane < 0 ? 5.2 + i * 0.45 : -(5.2 + i * 0.45);
+      movingCars.push({ group, speed: cruiseSpeed, cruiseSpeed, axis: "z" });
     }
     for (let i = 0; i < 4; i++) {
       const group = createCar(CAR_COLORS[(i + 4) % CAR_COLORS.length]);
@@ -1070,7 +1070,7 @@ export function ParkingGame() {
       group.position.set(-48 + i * 30, 0.08, lane);
       group.rotation.y = speed > 0 ? Math.PI / 2 : -Math.PI / 2;
       world.add(group);
-      movingCars.push({ group, speed, axis: "x" });
+      movingCars.push({ group, speed, cruiseSpeed: speed, axis: "x" });
     }
 
     const applyGraphics = (mode: GraphicsMode) => {
@@ -1151,6 +1151,7 @@ export function ParkingGame() {
     let actionKind: ActionKind | null = null;
     let actionTime = 0;
     let runningSpeed = 0;
+    let keyboardScheme: KeyboardScheme = "arrows";
     let nearest: CarData | null = null;
     let nearestDistance = Number.POSITIVE_INFINITY;
     let lastContextKey = "";
@@ -1165,6 +1166,74 @@ export function ParkingGame() {
       (Math.abs(z) <= 11.2 && Math.abs(x) <= 49) ||
       (Math.abs(z - 32) <= 10 && Math.abs(x) <= 38) ||
       (x >= 14 && x <= 44 && z >= 36 && z <= 54);
+
+    const vehicleDistances = (
+      position: THREE.Vector3,
+      axis: "x" | "z",
+      direction: number,
+    ) => {
+      const along = axis === "z" ? position.z : position.x;
+      const across = axis === "z" ? position.x : position.z;
+      const officerAlong = axis === "z" ? officer.root.position.z : officer.root.position.x;
+      const officerAcross = axis === "z" ? officer.root.position.x : officer.root.position.z;
+      return {
+        lateral: Math.abs(officerAcross - across),
+        ahead: (officerAlong - along) * direction,
+        officerAlong,
+      };
+    };
+
+    const shouldBrakeForOfficer = (
+      position: THREE.Vector3,
+      axis: "x" | "z",
+      direction: number,
+    ) => {
+      const { lateral, ahead } = vehicleDistances(position, axis, direction);
+      return lateral < 1.9 && ahead > -2.8 && ahead < 10;
+    };
+
+    const officerBlocksVehiclePath = (
+      position: THREE.Vector3,
+      nextCoordinate: number,
+      axis: "x" | "z",
+      direction: number,
+    ) => {
+      const { lateral, ahead, officerAlong } = vehicleDistances(position, axis, direction);
+      const nextAhead = (officerAlong - nextCoordinate) * direction;
+      return lateral < 1.65 && ahead > -2.8 && ahead < 12 && nextAhead < 2.8;
+    };
+
+    const officerClearsVehicle = (
+      x: number,
+      z: number,
+      position: THREE.Vector3,
+      axis: "x" | "z",
+    ) => {
+      const longitudinal = axis === "z" ? Math.abs(z - position.z) : Math.abs(x - position.x);
+      const lateral = axis === "z" ? Math.abs(x - position.x) : Math.abs(z - position.z);
+      return longitudinal >= 2.8 || lateral >= 1.55;
+    };
+
+    const canOfficerStandAt = (x: number, z: number) => {
+      if (!isWalkable(x, z)) return false;
+      for (const traffic of movingCars) {
+        if (
+          traffic.group.visible &&
+          !officerClearsVehicle(x, z, traffic.group.position, traffic.axis)
+        ) {
+          return false;
+        }
+      }
+      for (const spot of spots) {
+        if (
+          spot.car &&
+          !officerClearsVehicle(x, z, spot.car.group.position, spot.axis)
+        ) {
+          return false;
+        }
+      }
+      return true;
+    };
 
     const audioContextRef: { value: AudioContext | null } = { value: null };
     const playTone = (frequency: number, duration: number, type: OscillatorType = "sine") => {
@@ -1217,6 +1286,7 @@ export function ParkingGame() {
         lookedUp: false,
         phase: initial ? "parked" : "arriving",
         phaseTime: 0,
+        driveRate: initial ? 0 : 1,
         group,
       };
     };
@@ -1286,6 +1356,9 @@ export function ParkingGame() {
       boots = 0;
       combo = 0;
       lastTicketTime = -20;
+      keyboardScheme = "arrows";
+      keysRef.current.clear();
+      runningSpeed = 0;
       officer.root.position.set(-8.5, 0.15, -9);
       officer.root.rotation.y = 0;
       spots.forEach((spot, index) => {
@@ -1417,10 +1490,38 @@ export function ParkingGame() {
         event.preventDefault();
       }
       if (event.repeat) return;
-      keysRef.current.add(event.code);
-      if (event.code === "KeyE") doAction("ticket");
+      if (event.code.startsWith("Arrow")) {
+        keyboardScheme = "arrows";
+        keysRef.current.delete("KeyW");
+      }
+      if (["KeyA", "KeyS", "KeyD"].includes(event.code)) keyboardScheme = "wasd";
+
+      if (event.code === "KeyQ") doAction("ticket");
+      if (event.code === "KeyW" && keyboardScheme === "arrows") {
+        doAction("lookup");
+        keysRef.current.delete("KeyW");
+        return;
+      }
+      if (event.code === "KeyE") doAction("boot");
       if (event.code === "KeyF") doAction("lookup");
       if (event.code === "KeyB") doAction("boot");
+
+      if (
+        [
+          "ArrowUp",
+          "ArrowDown",
+          "ArrowLeft",
+          "ArrowRight",
+          "KeyW",
+          "KeyA",
+          "KeyS",
+          "KeyD",
+          "ShiftLeft",
+          "ShiftRight",
+        ].includes(event.code)
+      ) {
+        keysRef.current.add(event.code);
+      }
     };
     const onKeyUp = (event: KeyboardEvent) => keysRef.current.delete(event.code);
     window.addEventListener("keydown", onKeyDown);
@@ -1482,12 +1583,42 @@ export function ParkingGame() {
 
       for (const traffic of movingCars) {
         const coordinate = traffic.axis === "z" ? "z" : "x";
-        traffic.group.position[coordinate] += traffic.speed * dt;
-        if (traffic.group.position[coordinate] > 58) {
-          traffic.group.position[coordinate] = -58;
-        }
-        if (traffic.group.position[coordinate] < -58) {
-          traffic.group.position[coordinate] = 58;
+        const direction = Math.sign(traffic.cruiseSpeed) || 1;
+        const braking = shouldBrakeForOfficer(traffic.group.position, traffic.axis, direction);
+        traffic.speed = damp(
+          traffic.speed,
+          braking ? 0 : traffic.cruiseSpeed,
+          braking ? 7.5 : 2.4,
+          dt,
+        );
+        const currentCoordinate = traffic.group.position[coordinate];
+        let nextCoordinate = currentCoordinate + traffic.speed * dt;
+        const wrappedCoordinate =
+          nextCoordinate > 58 ? -58 : nextCoordinate < -58 ? 58 : nextCoordinate;
+        const isWrapping = wrappedCoordinate !== nextCoordinate;
+        nextCoordinate = wrappedCoordinate;
+
+        const blockedOnPath = officerBlocksVehiclePath(
+          traffic.group.position,
+          nextCoordinate,
+          traffic.axis,
+          direction,
+        );
+        const blockedAtWrap =
+          isWrapping &&
+          shouldBrakeForOfficer(
+            new THREE.Vector3(
+              traffic.axis === "x" ? nextCoordinate : traffic.group.position.x,
+              traffic.group.position.y,
+              traffic.axis === "z" ? nextCoordinate : traffic.group.position.z,
+            ),
+            traffic.axis,
+            direction,
+          );
+        if (blockedOnPath || blockedAtWrap) {
+          traffic.speed = 0;
+        } else {
+          traffic.group.position[coordinate] = nextCoordinate;
         }
       }
       clouds.forEach((cloud, index) => {
@@ -1527,12 +1658,12 @@ export function ParkingGame() {
           const moveZ = inputZ / length;
           const nextX = officer.root.position.x + moveX * runningSpeed * dt;
           const nextZ = officer.root.position.z + moveZ * runningSpeed * dt;
-          if (isWalkable(nextX, nextZ)) {
+          if (canOfficerStandAt(nextX, nextZ)) {
             officer.root.position.x = nextX;
             officer.root.position.z = nextZ;
-          } else if (isWalkable(nextX, officer.root.position.z)) {
+          } else if (canOfficerStandAt(nextX, officer.root.position.z)) {
             officer.root.position.x = nextX;
-          } else if (isWalkable(officer.root.position.x, nextZ)) {
+          } else if (canOfficerStandAt(officer.root.position.x, nextZ)) {
             officer.root.position.z = nextZ;
           }
           const targetAngle = Math.atan2(moveX, moveZ);
@@ -1542,21 +1673,40 @@ export function ParkingGame() {
         spots.forEach((spot) => {
           const car = spot.car;
           if (!car) {
-            if (gameTime >= spot.respawnAt) spawnCar(spot);
+            const spawnX = spot.axis === "z" ? spot.x : -52;
+            const spawnZ = spot.axis === "x" ? spot.z : -52;
+            if (
+              gameTime >= spot.respawnAt &&
+              Math.hypot(officer.root.position.x - spawnX, officer.root.position.z - spawnZ) > 3.5
+            ) {
+              spawnCar(spot);
+            }
             return;
           }
-          car.phaseTime += dt;
           if (car.phase === "arriving") {
-            const progress = Math.min(1, car.phaseTime / 2.2);
+            const coordinate = spot.axis === "z" ? "z" : "x";
+            const destination = spot.axis === "z" ? spot.z : spot.x;
+            const duration = Math.max(2.2, Math.abs(destination + 52) / 7);
+            const braking = shouldBrakeForOfficer(car.group.position, spot.axis, 1);
+            car.driveRate = damp(car.driveRate, braking ? 0 : 1, braking ? 8 : 2.5, dt);
+            const nextPhaseTime = car.phaseTime + dt * car.driveRate;
+            const progress = Math.min(1, nextPhaseTime / duration);
             const eased = 1 - Math.pow(1 - progress, 3);
-            if (spot.axis === "z") {
-              car.group.position.z = THREE.MathUtils.lerp(-52, spot.z, eased);
+            const nextCoordinate = THREE.MathUtils.lerp(-52, destination, eased);
+            let reachedSpot = progress >= 1;
+            if (
+              officerBlocksVehiclePath(car.group.position, nextCoordinate, spot.axis, 1)
+            ) {
+              car.driveRate = 0;
+              reachedSpot = false;
             } else {
-              car.group.position.x = THREE.MathUtils.lerp(-52, spot.x, eased);
+              car.phaseTime = nextPhaseTime;
+              car.group.position[coordinate] = nextCoordinate;
             }
-            if (progress >= 1) {
+            if (reachedSpot) {
               car.phase = "parked";
               car.phaseTime = 0;
+              car.driveRate = 0;
               car.expireAt = gameTime + 7 + Math.random() * 18;
               car.departAt = gameTime + 30 + Math.random() * 18;
             }
@@ -1564,16 +1714,29 @@ export function ParkingGame() {
             if (gameTime >= car.departAt && !car.booted) {
               car.phase = "leaving";
               car.phaseTime = 0;
+              car.driveRate = 0;
             }
           } else {
-            const progress = Math.min(1, car.phaseTime / 2.4);
+            const coordinate = spot.axis === "z" ? "z" : "x";
+            const origin = spot.axis === "z" ? spot.z : spot.x;
+            const duration = Math.max(2.4, Math.abs(52 - origin) / 7);
+            const braking = shouldBrakeForOfficer(car.group.position, spot.axis, 1);
+            car.driveRate = damp(car.driveRate, braking ? 0 : 1, braking ? 8 : 2.5, dt);
+            const nextPhaseTime = car.phaseTime + dt * car.driveRate;
+            const progress = Math.min(1, nextPhaseTime / duration);
             const eased = progress * progress;
-            if (spot.axis === "z") {
-              car.group.position.z = THREE.MathUtils.lerp(spot.z, 52, eased);
+            const nextCoordinate = THREE.MathUtils.lerp(origin, 52, eased);
+            let leftDistrict = progress >= 1;
+            if (
+              officerBlocksVehiclePath(car.group.position, nextCoordinate, spot.axis, 1)
+            ) {
+              car.driveRate = 0;
+              leftDistrict = false;
             } else {
-              car.group.position.x = THREE.MathUtils.lerp(spot.x, 52, eased);
+              car.phaseTime = nextPhaseTime;
+              car.group.position[coordinate] = nextCoordinate;
             }
-            if (progress >= 1) removeCar(spot);
+            if (leftDistrict) removeCar(spot);
           }
           const meterMaterial = spot.meterLight.material as THREE.MeshStandardMaterial;
           const expired = car.expireAt <= gameTime;
@@ -1832,21 +1995,21 @@ export function ParkingGame() {
                 <i>1</i>
                 <div>
                   <strong>Explore downtown</strong>
-                  <span>Patrol Main Street, Civic Avenue, Garden Lane, and the plaza.</span>
+                  <span>Move with the arrow keys. WASD remains available; hold Shift to run.</span>
                 </div>
               </li>
               <li>
                 <i>2</i>
                 <div>
                   <strong>Watch the meters</strong>
-                  <span>Red means expired. Get close and press E to ticket.</span>
+                  <span>Red means expired. Get close and press Q to ticket.</span>
                 </div>
               </li>
               <li>
                 <i>3</i>
                 <div>
                   <strong>Catch repeat offenders</strong>
-                  <span>Press F to look up a plate. Ticket first, then B to boot.</span>
+                  <span>Press W to look up a plate. Ticket first, then E to boot.</span>
                 </div>
               </li>
             </ol>
@@ -1929,14 +2092,14 @@ export function ParkingGame() {
                 )}
                 <div className={styles.actionButtons}>
                   <button onClick={() => act("ticket")} disabled={context.ticketed}>
-                    <kbd>E</kbd>{context.ticketed ? "Ticketed" : "Write ticket"}
+                    <kbd>Q</kbd>{context.ticketed ? "Ticketed" : "Write ticket"}
                   </button>
                   <button onClick={() => act("lookup")}>
-                    <kbd>F</kbd>{context.lookedUp ? "Record open" : "Look up plate"}
+                    <kbd>W</kbd>{context.lookedUp ? "Record open" : "Look up plate"}
                   </button>
                   {context.lookedUp && context.priors >= 3 && (
                     <button onClick={() => act("boot")} disabled={context.booted}>
-                      <kbd>B</kbd>{context.booted ? "Booted" : "Place boot"}
+                      <kbd>E</kbd>{context.booted ? "Booted" : "Place boot"}
                     </button>
                   )}
                 </div>
@@ -1951,9 +2114,9 @@ export function ParkingGame() {
 
           <div className={styles.movementHint}>
             <div className={styles.keyGrid} aria-hidden="true">
-              <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>
+              <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd>
             </div>
-            <span>Move · Hold Shift to run</span>
+            <span>Arrow keys move · Q W E act · Shift runs</span>
           </div>
 
           <div className={styles.touchControls} aria-label="Touch controls">

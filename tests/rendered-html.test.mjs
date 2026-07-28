@@ -112,6 +112,43 @@ test("opens connected side streets and keeps the officer visible", async () => {
   assert.doesNotMatch(game, /clamp\(officer\.root\.position\.x, -11\.2, 11\.2\)/);
 });
 
+test("supports the two-hand Q W E layout and keeps WASD available", async () => {
+  const game = await readFile(
+    new URL("app/parking-game.tsx", projectRoot),
+    "utf8",
+  );
+
+  assert.match(game, /keyboardScheme: KeyboardScheme = "arrows"/);
+  assert.match(game, /event\.code === "KeyQ"\) doAction\("ticket"\)/);
+  assert.match(game, /event\.code === "KeyW" && keyboardScheme === "arrows"/);
+  assert.match(game, /doAction\("lookup"\);\s*keysRef\.current\.delete\("KeyW"\);\s*return;/);
+  assert.match(game, /event\.code === "KeyE"\) doAction\("boot"\)/);
+  assert.match(game, /event\.code === "KeyF"\) doAction\("lookup"\)/);
+  assert.match(game, /\["KeyA", "KeyS", "KeyD"\]\.includes\(event\.code\)/);
+  assert.match(game, /event\.code\.startsWith\("Arrow"\)[\s\S]*keysRef\.current\.delete\("KeyW"\)/);
+  assert.match(game, /<kbd>Q<\/kbd>/);
+  assert.match(game, /<kbd>W<\/kbd>/);
+  assert.match(game, /<kbd>E<\/kbd>/);
+});
+
+test("brakes moving cars and blocks vehicle clipping", async () => {
+  const game = await readFile(
+    new URL("app/parking-game.tsx", projectRoot),
+    "utf8",
+  );
+
+  assert.match(game, /cruiseSpeed: number/);
+  assert.match(game, /const shouldBrakeForOfficer/);
+  assert.match(game, /const officerBlocksVehiclePath/);
+  assert.match(game, /braking \? 0 : traffic\.cruiseSpeed/);
+  assert.match(game, /traffic\.speed = 0/);
+  assert.match(game, /driveRate: number/);
+  assert.match(game, /car\.phaseTime \+ dt \* car\.driveRate/);
+  assert.match(game, /car\.driveRate = 0/);
+  assert.match(game, /const canOfficerStandAt/);
+  assert.match(game, /canOfficerStandAt\(nextX, nextZ\)/);
+});
+
 test("stores named global scores through the Sites D1 binding", async () => {
   const [game, route, sessionRoute, server, schema, hosting] = await Promise.all([
     readFile(new URL("app/parking-game.tsx", projectRoot), "utf8"),

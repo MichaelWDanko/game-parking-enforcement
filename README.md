@@ -6,11 +6,15 @@ offenders before the 90-second shift ends.
 
 ## Play
 
-- Move with `WASD` or the arrow keys.
+- Move with the arrow keys for the two-hand layout.
 - Hold `Shift` to run.
-- Press `E` near a car to write a ticket.
-- Press `F` to look up its plate.
-- Press `B` to boot an eligible repeat offender after writing its ticket.
+- Press `Q` near a car to write a ticket.
+- Press `W` to look up its plate.
+- Press `E` to boot an eligible repeat offender after writing its ticket.
+
+`WASD` remains available. Press `A`, `S`, or `D` to switch to that layout;
+`F` looks up plates while `W` moves forward. The arrow keys switch back to the
+`Q`/`W`/`E` action layout.
 
 Touch controls appear on small screens. The best score is saved on the current
 device.
@@ -32,7 +36,8 @@ initial download.
 
 Main Street now connects to Civic Avenue, Garden Lane, and Garden Plaza. Cars
 park and travel in both street directions. Buildings that cross the camera
-sightline hide until the officer is visible again.
+sightline hide until the officer is visible again. Moving cars brake for the
+officer, and vehicle clearance keeps the officer and cars from clipping.
 
 ## Scoring
 
