@@ -3,6 +3,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import styles from "./parking-game.module.css";
+import {
+  nearestTrafficGap,
+  TRAFFIC_BRAKE_DISTANCE,
+  TRAFFIC_LOOP_MAX,
+  TRAFFIC_LOOP_MIN,
+  trafficVehiclesOverlap,
+  type TrafficAxis,
+  type TrafficVehiclePosition,
+} from "./traffic-collision";
 
 type Screen = "loading" | "home" | "playing" | "gameover";
 type ActionKind = "ticket" | "lookup" | "boot";
@@ -120,13 +129,20 @@ type CarData = {
 };
 
 type ParkingSpot = {
-  axis: "x" | "z";
+  axis: TrafficAxis;
   x: number;
   z: number;
   side: number;
   meterLight: THREE.Mesh;
   car: CarData | null;
   respawnAt: number;
+};
+
+type MovingCar = {
+  group: THREE.Group;
+  speed: number;
+  cruiseSpeed: number;
+  axis: TrafficAxis;
 };
 
 const INITIAL_STATS: Stats = {
@@ -1046,12 +1062,7 @@ export function ParkingGame() {
     officer.root.position.set(-8.5, 0.15, -9);
     world.add(officer.root);
 
-    const movingCars: {
-      group: THREE.Group;
-      speed: number;
-      cruiseSpeed: number;
-      axis: "x" | "z";
-    }[] = [];
+    const movingCars: MovingCar[] = [];
     for (let i = 0; i < 6; i++) {
       const group = createCar(CAR_COLORS[(i + 2) % CAR_COLORS.length]);
       group.scale.setScalar(0.82);
@@ -1169,7 +1180,7 @@ export function ParkingGame() {
 
     const vehicleDistances = (
       position: THREE.Vector3,
-      axis: "x" | "z",
+      axis: TrafficAxis,
       direction: number,
     ) => {
       const along = axis === "z" ? position.z : position.x;
@@ -1185,7 +1196,7 @@ export function ParkingGame() {
 
     const shouldBrakeForOfficer = (
       position: THREE.Vector3,
-      axis: "x" | "z",
+      axis: TrafficAxis,
       direction: number,
     ) => {
       const { lateral, ahead } = vehicleDistances(position, axis, direction);
@@ -1195,7 +1206,7 @@ export function ParkingGame() {
     const officerBlocksVehiclePath = (
       position: THREE.Vector3,
       nextCoordinate: number,
-      axis: "x" | "z",
+      axis: TrafficAxis,
       direction: number,
     ) => {
       const { lateral, ahead, officerAlong } = vehicleDistances(position, axis, direction);
@@ -1207,7 +1218,7 @@ export function ParkingGame() {
       x: number,
       z: number,
       position: THREE.Vector3,
-      axis: "x" | "z",
+      axis: TrafficAxis,
     ) => {
       const longitudinal = axis === "z" ? Math.abs(z - position.z) : Math.abs(x - position.x);
       const lateral = axis === "z" ? Math.abs(x - position.x) : Math.abs(z - position.z);
@@ -1233,6 +1244,37 @@ export function ParkingGame() {
         }
       }
       return true;
+    };
+
+    const trafficPosition = (
+      traffic: MovingCar,
+      nextCoordinate?: number,
+    ): TrafficVehiclePosition => ({
+      axis: traffic.axis,
+      x: traffic.axis === "x" && nextCoordinate !== undefined
+        ? nextCoordinate
+        : traffic.group.position.x,
+      z: traffic.axis === "z" && nextCoordinate !== undefined
+        ? nextCoordinate
+        : traffic.group.position.z,
+    });
+
+    const shouldBrakeForTraffic = (traffic: MovingCar, direction: number) => {
+      const otherVehicles = movingCars
+        .filter((other) => other !== traffic && other.group.visible)
+        .map((other) => trafficPosition(other));
+      return nearestTrafficGap(trafficPosition(traffic), direction, otherVehicles)
+        < TRAFFIC_BRAKE_DISTANCE;
+    };
+
+    const trafficClearsVehicle = (traffic: MovingCar, nextCoordinate: number) => {
+      const nextPosition = trafficPosition(traffic, nextCoordinate);
+      return movingCars.every(
+        (other) =>
+          other === traffic ||
+          !other.group.visible ||
+          !trafficVehiclesOverlap(nextPosition, trafficPosition(other)),
+      );
     };
 
     const audioContextRef: { value: AudioContext | null } = { value: null };
@@ -1584,7 +1626,13 @@ export function ParkingGame() {
       for (const traffic of movingCars) {
         const coordinate = traffic.axis === "z" ? "z" : "x";
         const direction = Math.sign(traffic.cruiseSpeed) || 1;
-        const braking = shouldBrakeForOfficer(traffic.group.position, traffic.axis, direction);
+        const brakingForOfficer = shouldBrakeForOfficer(
+          traffic.group.position,
+          traffic.axis,
+          direction,
+        );
+        const brakingForTraffic = shouldBrakeForTraffic(traffic, direction);
+        const braking = brakingForOfficer || brakingForTraffic;
         traffic.speed = damp(
           traffic.speed,
           braking ? 0 : traffic.cruiseSpeed,
@@ -1594,7 +1642,11 @@ export function ParkingGame() {
         const currentCoordinate = traffic.group.position[coordinate];
         let nextCoordinate = currentCoordinate + traffic.speed * dt;
         const wrappedCoordinate =
-          nextCoordinate > 58 ? -58 : nextCoordinate < -58 ? 58 : nextCoordinate;
+          nextCoordinate > TRAFFIC_LOOP_MAX
+            ? TRAFFIC_LOOP_MIN
+            : nextCoordinate < TRAFFIC_LOOP_MIN
+              ? TRAFFIC_LOOP_MAX
+              : nextCoordinate;
         const isWrapping = wrappedCoordinate !== nextCoordinate;
         nextCoordinate = wrappedCoordinate;
 
@@ -1615,7 +1667,8 @@ export function ParkingGame() {
             traffic.axis,
             direction,
           );
-        if (blockedOnPath || blockedAtWrap) {
+        const blockedByTraffic = !trafficClearsVehicle(traffic, nextCoordinate);
+        if (blockedOnPath || blockedAtWrap || blockedByTraffic) {
           traffic.speed = 0;
         } else {
           traffic.group.position[coordinate] = nextCoordinate;

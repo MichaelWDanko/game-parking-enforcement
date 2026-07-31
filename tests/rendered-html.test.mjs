@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import {
+  forwardLoopDistance,
+  nearestTrafficGap,
+  TRAFFIC_BRAKE_DISTANCE,
+  trafficVehiclesOverlap,
+} from "../app/traffic-collision.ts";
 
 const projectRoot = new URL("../", import.meta.url);
 
@@ -140,6 +146,10 @@ test("brakes moving cars and blocks vehicle clipping", async () => {
   assert.match(game, /cruiseSpeed: number/);
   assert.match(game, /const shouldBrakeForOfficer/);
   assert.match(game, /const officerBlocksVehiclePath/);
+  assert.match(game, /const shouldBrakeForTraffic/);
+  assert.match(game, /const trafficClearsVehicle/);
+  assert.match(game, /brakingForOfficer \|\| brakingForTraffic/);
+  assert.match(game, /blockedOnPath \|\| blockedAtWrap \|\| blockedByTraffic/);
   assert.match(game, /braking \? 0 : traffic\.cruiseSpeed/);
   assert.match(game, /traffic\.speed = 0/);
   assert.match(game, /driveRate: number/);
@@ -147,6 +157,39 @@ test("brakes moving cars and blocks vehicle clipping", async () => {
   assert.match(game, /car\.driveRate = 0/);
   assert.match(game, /const canOfficerStandAt/);
   assert.match(game, /canOfficerStandAt\(nextX, nextZ\)/);
+});
+
+test("keeps traffic separated in lanes, intersections, and loop wrapping", () => {
+  const northbound = { axis: "z", x: -1.9, z: 54 };
+  const wrappedLeader = { axis: "z", x: -1.9, z: -56 };
+  const oppositeLane = { axis: "z", x: 1.9, z: -56 };
+
+  assert.equal(forwardLoopDistance(54, -56, 1), 6);
+  assert.equal(nearestTrafficGap(northbound, 1, [wrappedLeader]), 6);
+  assert.ok(nearestTrafficGap(northbound, 1, [wrappedLeader]) < TRAFFIC_BRAKE_DISTANCE);
+  assert.equal(nearestTrafficGap(northbound, 1, [oppositeLane]), Number.POSITIVE_INFINITY);
+
+  assert.equal(
+    trafficVehiclesOverlap(
+      { axis: "z", x: -1.9, z: -56 },
+      { axis: "z", x: -1.9, z: -53 },
+    ),
+    true,
+  );
+  assert.equal(
+    trafficVehiclesOverlap(
+      { axis: "z", x: -1.9, z: 0 },
+      { axis: "x", x: 0, z: -1.9 },
+    ),
+    true,
+  );
+  assert.equal(
+    trafficVehiclesOverlap(
+      { axis: "z", x: -1.9, z: -56 },
+      oppositeLane,
+    ),
+    false,
+  );
 });
 
 test("stores named global scores through the Sites D1 binding", async () => {
