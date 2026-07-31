@@ -4,6 +4,9 @@ Meter Mayhem is a colorful 3D parking-enforcement game for the browser. Patrol
 the block, ticket cars with expired meters, look up plates, and boot repeat
 offenders before the 90-second shift ends.
 
+Play the public game at
+[meter-mayhem-parking.michaelwdanko.chatgpt.site](https://meter-mayhem-parking.michaelwdanko.chatgpt.site).
+
 ## Play
 
 - Move with the arrow keys for the two-hand layout.
