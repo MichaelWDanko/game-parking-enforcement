@@ -61,7 +61,7 @@ test("includes the full game loop and accessible controls", async () => {
   assert.match(game, /Will you help me patrol/);
   assert.match(game, /data-testid="final-score"/);
   assert.match(game, /aria-label="Touch controls"/);
-  assert.match(game, /window\.localStorage\.setItem\("meter-mayhem-best"/);
+  assert.match(game, /meter-mayhem-best:/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
   assert.doesNotMatch(game, /SkeletonPreview|react-loading-skeleton/);
 });
@@ -96,8 +96,31 @@ test("offers saved graphics modes and streams the city in chunks", async () => {
   assert.match(game, /"auto" \| "performance" \| "balanced" \| "quality"/);
   assert.match(game, /meter-mayhem-graphics/);
   assert.match(game, /fetch\(assetPath\(definition\.file\)\)/);
-  assert.match(game, /city blocks ready/);
+  assert.match(game, /blocks ready/);
   assert.match(game, /Graphics settings/);
+});
+
+test("offers three saved city palettes without changing layout or difficulty", async () => {
+  const [game, cityThemes] = await Promise.all([
+    readFile(new URL("app/parking-game.tsx", projectRoot), "utf8"),
+    readFile(new URL("app/city-themes.ts", projectRoot), "utf8"),
+  ]);
+
+  assert.match(cityThemes, /"port-alder"/);
+  assert.match(cityThemes, /"ironlake"/);
+  assert.match(cityThemes, /"juniper-ridge"/);
+  assert.match(cityThemes, /name: "Port Alder"/);
+  assert.match(cityThemes, /name: "Ironlake"/);
+  assert.match(cityThemes, /name: "Juniper Ridge"/);
+  assert.doesNotMatch(cityThemes, /Boston|Chicago|Denver/);
+  assert.doesNotMatch(cityThemes, /difficulty|shiftSeconds|trafficCount/i);
+  assert.match(game, /Choose patrol city/);
+  assert.match(game, /Same streets and challenge/);
+  assert.match(game, /meter-mayhem-city/);
+  assert.match(game, /applyCityRef/);
+  assert.match(game, /fetch\(assetPath\("\/world\/downtown\/manifest\.json"\)\)/);
+  assert.match(game, /gameTime >= SHIFT_DURATION_SECONDS/);
+  assert.match(game, /SHIFT_DURATION_SECONDS - gameTime/);
 });
 
 test("opens connected side streets and keeps the officer visible", async () => {
@@ -150,7 +173,7 @@ test("brakes moving cars and blocks vehicle clipping", async () => {
   assert.match(game, /const trafficClearsVehicle/);
   assert.match(game, /brakingForOfficer \|\| brakingForTraffic/);
   assert.match(game, /blockedOnPath \|\| blockedAtWrap \|\| blockedByTraffic/);
-  assert.match(game, /braking \? 0 : traffic\.cruiseSpeed/);
+  assert.match(game, /braking \? 0 : traffic\.cruiseSpeed \* trafficSpeedMultiplier/);
   assert.match(game, /traffic\.speed = 0/);
   assert.match(game, /driveRate: number/);
   assert.match(game, /car\.phaseTime \+ dt \* car\.driveRate/);
@@ -207,9 +230,9 @@ test("stores named global scores through the Sites D1 binding", async () => {
   assert.match(schema, /uniqueIndex\("scores_run_id_unique"\)/);
   assert.match(schema, /sqliteTable\(\s*"score_rate_limits"/);
   assert.match(schema, /score_rate_limits_source_created_idx/);
-  assert.match(route, /export async function GET\(\)/);
+  assert.match(route, /export async function GET\(request: Request\)/);
   assert.match(route, /export async function POST\(request: Request\)/);
-  assert.match(sessionRoute, /issueShiftSession\(request\)/);
+  assert.match(sessionRoute, /issueShiftSession\(request, payload\)/);
   assert.match(server, /SCOREBOARD_SECRET/);
   assert.match(server, /CF-Connecting-IP/);
   assert.match(server, /minimumSessionAgeSeconds:\s*75/);
@@ -219,6 +242,8 @@ test("stores named global scores through the Sites D1 binding", async () => {
   assert.match(route, /"runId",\s*"issuedAt",\s*"token"/);
   assert.match(route, /validated\.runId !== session\.runId/);
   assert.match(route, /validated\.issuedAt !== session\.issuedAt/);
+  assert.match(route, /validated\.challengeId !== session\.challengeId/);
+  assert.match(route, /expectedDailyChallenge\(challengeId\)/);
   assert.match(route, /entryId:\s*String\(row\.id\)/);
   assert.doesNotMatch(route, /runId:\s*row\.runId/);
   assert.match(server, /maxTickets:\s*24/);
@@ -234,7 +259,36 @@ test("stores named global scores through the Sites D1 binding", async () => {
   assert.match(game, /runId: gameResult\.runId/);
   assert.match(game, /issuedAt: gameResult\.issuedAt/);
   assert.match(game, /token: gameResult\.token/);
+  assert.match(game, /challengeId: gameResult\.challengeId/);
+  assert.match(game, /objectiveBonus: gameResult\.objectiveBonus/);
   assert.match(game, /fetchWithTimeout\("\/api\/scores"/);
   assert.match(game, /entry\.entryId === lastSavedScore\.entryId/);
   assert.match(game, /controller\.abort\(\)/);
+});
+
+test("runs deterministic daily dispatches with fair traffic and local ghosts", async () => {
+  const [game, dispatch, ghostStore, feedback] = await Promise.all([
+    readFile(new URL("app/parking-game.tsx", projectRoot), "utf8"),
+    readFile(new URL("app/daily-dispatch.ts", projectRoot), "utf8"),
+    readFile(new URL("app/ghost-store.ts", projectRoot), "utf8"),
+    readFile(new URL("app/game-feedback.ts", projectRoot), "utf8"),
+  ]);
+
+  assert.match(dispatch, /createSeededRandom/);
+  assert.match(dispatch, /FIXED_STEP_SECONDS = 1 \/ 60/);
+  assert.match(dispatch, /"meter-surge"/);
+  assert.match(dispatch, /"repeat-alert"/);
+  assert.match(dispatch, /"rush-hour"/);
+  assert.match(dispatch, /"street-sweep"/);
+  assert.match(dispatch, /"priority-expiry"/);
+  assert.match(game, /while \(simulationAccumulator >= FIXED_STEP_SECONDS\)/);
+  assert.doesNotMatch(game, /Math\.random\(\)/);
+  assert.doesNotMatch(game, /traffic\.group\.visible/);
+  assert.match(game, /Personal best ghost/);
+  assert.match(game, /document\.addEventListener\("visibilitychange"/);
+  assert.match(game, /gamepad\?\.buttons\[15\]/);
+  assert.match(game, />Run<\/button>/);
+  assert.match(ghostStore, /indexedDB/);
+  assert.match(feedback, /createPanner\(\)/);
+  assert.match(feedback, /vibrationActuator/);
 });

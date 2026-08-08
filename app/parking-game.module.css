@@ -5,7 +5,7 @@
   min-height: 560px;
   overflow: hidden;
   isolation: isolate;
-  background: #7bdcf4;
+  background: var(--city-sky, #7bdcf4);
 }
 
 .canvas {
@@ -26,7 +26,11 @@
   height: 58vmax;
   border-radius: 50%;
   pointer-events: none;
-  background: radial-gradient(circle, rgba(255, 246, 190, 0.75), rgba(255, 246, 190, 0) 68%);
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--city-highlight, #ffd45b) 76%, transparent),
+    transparent 68%
+  );
 }
 
 .loading {
@@ -159,7 +163,11 @@
   gap: clamp(1.5rem, 5vw, 6rem);
   align-items: center;
   padding: clamp(2rem, 6vw, 6.5rem);
-  background: linear-gradient(90deg, rgba(23, 40, 59, 0.73), rgba(23, 40, 59, 0.04) 66%);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--city-deep, #17283b) 78%, transparent),
+    color-mix(in srgb, var(--city-deep, #17283b) 5%, transparent) 66%
+  );
 }
 
 .homeCard {
@@ -229,6 +237,180 @@
 .grahamIntro p {
   margin: 0;
   font: 700 clamp(0.82rem, 1.25vw, 1rem)/1.5 "Trebuchet MS", sans-serif;
+}
+
+.dailyBriefing {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem 0.8rem;
+  max-width: 39rem;
+  margin: -0.6rem 0 1rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid color-mix(in srgb, var(--city-highlight) 75%, white);
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--city-deep) 78%, transparent);
+  box-shadow: inset 0.25rem 0 0 var(--city-highlight);
+  backdrop-filter: blur(12px);
+}
+
+.dailyBriefing header,
+.dailyBriefing > p,
+.ghostReady {
+  grid-column: 1 / -1;
+}
+
+.dailyBriefing header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.dailyBriefing header div,
+.briefingObjective,
+.briefingIncident {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.dailyBriefing header span,
+.briefingObjective span,
+.briefingIncident span {
+  color: var(--city-highlight);
+  font-size: 0.58rem;
+  font-weight: 950;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.dailyBriefing h2 {
+  margin: 0.12rem 0 0;
+  font-size: 1.05rem;
+}
+
+.dailyBriefing header > b {
+  padding: 0.35rem 0.55rem;
+  border-radius: 999px;
+  background: var(--yellow);
+  color: var(--ink);
+  font-size: 0.72rem;
+}
+
+.dailyBriefing > p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.82);
+  font: 700 0.72rem/1.4 "Trebuchet MS", sans-serif;
+}
+
+.briefingObjective strong {
+  font-size: 0.76rem;
+}
+
+.briefingObjective small,
+.briefingIncident small {
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 0.58rem;
+  font-weight: 700;
+}
+
+.briefingIncident {
+  justify-items: end;
+  text-align: right;
+}
+
+.ghostReady {
+  color: #c9fff4 !important;
+}
+
+.cityPicker {
+  max-width: 39rem;
+  margin: -0.45rem 0 1rem;
+  padding: 0.72rem;
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  border-radius: 1rem;
+  background: rgba(23, 40, 59, 0.58);
+  backdrop-filter: blur(10px);
+}
+
+.cityPicker legend {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0.25rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 950;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cityPicker legend small {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.58rem;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.cityOptions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.42rem;
+}
+
+.cityOptions button {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.18rem 0.48rem;
+  align-items: center;
+  min-height: 4rem;
+  padding: 0.52rem;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.08);
+  color: white;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.cityOptions button:hover {
+  transform: translateY(-0.1rem);
+  border-color: rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.cityOptions .cityActive {
+  border-color: var(--city-highlight);
+  background: color-mix(in srgb, var(--city-accent) 62%, rgba(23, 40, 59, 0.65));
+  box-shadow: inset 0 0 0 1px var(--city-highlight);
+}
+
+.citySwatches {
+  display: flex;
+  grid-row: 1 / span 2;
+  overflow: hidden;
+  width: 2rem;
+  height: 2.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 0.55rem;
+}
+
+.citySwatches i {
+  flex: 1;
+}
+
+.cityOptions strong {
+  align-self: end;
+  font-size: 0.72rem;
+  line-height: 1.1;
+}
+
+.cityOptions small {
+  align-self: start;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.55rem;
+  font-weight: 700;
+  line-height: 1.2;
 }
 
 .playerIdentity {
@@ -537,7 +719,7 @@
   border: 0.2rem solid white;
   border-radius: 0.75rem;
   transform: rotate(-6deg);
-  background: var(--coral);
+  background: var(--city-accent, var(--coral));
   font-weight: 1000;
 }
 
@@ -618,6 +800,90 @@
   backdrop-filter: blur(10px);
 }
 
+.objectiveCard {
+  position: absolute;
+  top: 5.15rem;
+  left: 50%;
+  z-index: 7;
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) minmax(7rem, 0.62fr) auto;
+  gap: 0.35rem 0.75rem;
+  align-items: center;
+  width: min(42rem, calc(100vw - 2rem));
+  padding: 0.58rem 0.72rem;
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  border-radius: 1rem;
+  transform: translateX(-50%);
+  background: rgba(23, 40, 59, 0.8);
+  color: white;
+  box-shadow: 0 0.65rem 1.8rem rgba(23, 40, 59, 0.2);
+  backdrop-filter: blur(14px);
+  pointer-events: none;
+}
+
+.objectiveCard > div:first-child,
+.incidentStatus {
+  display: grid;
+  gap: 0.08rem;
+}
+
+.objectiveCard span {
+  color: var(--city-highlight);
+  font-size: 0.52rem;
+  font-weight: 950;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.objectiveCard strong {
+  font-size: 0.72rem;
+}
+
+.objectiveCard small {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.57rem;
+  font-weight: 750;
+}
+
+.objectiveCard[data-complete="true"] {
+  box-shadow: inset 0 0 0 2px #48d6c8, 0 0.65rem 1.8rem rgba(23, 40, 59, 0.2);
+}
+
+.objectiveProgress {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  height: 0.28rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.objectiveProgress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--city-highlight);
+  transition: width 160ms ease;
+}
+
+.incidentStatus {
+  padding-left: 0.75rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.incidentStatus span {
+  color: #ffb6c1;
+}
+
+.ghostBadge {
+  padding: 0.32rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(72, 214, 200, 0.2);
+  color: #bafff6;
+  font-size: 0.52rem;
+  letter-spacing: 0.06em;
+}
+
 .graphicsDrawer {
   position: absolute;
   top: 5.5rem;
@@ -690,7 +956,7 @@
 
 .toast {
   position: absolute;
-  top: 6.2rem;
+  top: 9.5rem;
   left: 50%;
   z-index: 7;
   padding: 0.62rem 1rem;
@@ -787,6 +1053,14 @@
 
 .expired .statusDot {
   animation: statusPulse 0.65s ease-in-out infinite alternate;
+}
+
+.priorityBadge {
+  display: block;
+  margin: 0.45rem 0 -0.1rem;
+  color: #bd304a;
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
 }
 
 .record {
@@ -940,7 +1214,7 @@
   display: grid;
   place-items: center;
   padding: 1rem;
-  background: rgba(74, 61, 161, 0.78);
+  background: color-mix(in srgb, var(--city-deep, #4a3da1) 82%, transparent);
   backdrop-filter: blur(10px);
 }
 
@@ -967,12 +1241,12 @@
 }
 
 .gameOver .eyebrow {
-  color: #6956d5;
+  color: var(--city-deep, #6956d5);
 }
 
 .gameOver h1 {
   font-size: clamp(2.5rem, 7vw, 4.8rem);
-  color: var(--coral);
+  color: var(--city-accent, var(--coral));
 }
 
 .resultLead {
@@ -1036,6 +1310,55 @@
 .resultStats span {
   color: #748091;
   font-size: 0.63rem;
+  font-weight: 850;
+}
+
+.objectiveResult {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: -0.45rem 0 0.85rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 0.8rem;
+  background: #f0edf9;
+  text-align: left;
+}
+
+.objectiveResult > div {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.objectiveResult span {
+  color: #77838e;
+  font-size: 0.55rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.objectiveResult strong {
+  font-size: 0.72rem;
+}
+
+.objectiveResult > b {
+  color: #9b3148;
+  font-size: 0.64rem;
+}
+
+.objectiveResult[data-complete="true"] {
+  background: #d8f7ed;
+}
+
+.objectiveResult[data-complete="true"] > b {
+  color: #157366;
+}
+
+.ghostSaved {
+  margin: -0.35rem 0 0.75rem;
+  color: #247c70;
+  font-size: 0.64rem;
   font-weight: 850;
 }
 
@@ -1105,10 +1428,37 @@
 .leaderboard header > b {
   padding: 0.35rem 0.55rem;
   border-radius: 999px;
-  background: #e7e1ff;
-  color: #6554cb;
+  background: color-mix(in srgb, var(--city-highlight, #e7e1ff) 34%, white);
+  color: var(--city-deep, #6554cb);
   font-size: 0.62rem;
   letter-spacing: 0.08em;
+}
+
+.boardTabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.3rem;
+  margin: -0.2rem 0 0.7rem;
+  padding: 0.25rem;
+  border-radius: 0.75rem;
+  background: #e9e5dc;
+}
+
+.boardTabs button {
+  min-height: 2rem;
+  border: 0;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: #697789;
+  font-size: 0.65rem;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.boardTabs button[data-active="true"] {
+  background: white;
+  color: #5948bd;
+  box-shadow: 0 0.2rem 0.6rem rgba(23, 40, 59, 0.1);
 }
 
 .leaderboard ol {
@@ -1278,6 +1628,94 @@
   to { transform: translateY(110vh) rotate(540deg); }
 }
 
+@media (min-width: 901px) and (max-height: 850px) {
+  .home {
+    gap: 2rem;
+    align-items: start;
+    padding-block: 0.75rem;
+    overflow-y: auto;
+  }
+
+  .home h1 {
+    font-size: clamp(3rem, 8vh, 4.1rem);
+  }
+
+  .grahamIntro {
+    grid-template-columns: 2.8rem 1fr;
+    margin: 0.45rem 0 0.55rem;
+    padding: 0.5rem 0.7rem;
+  }
+
+  .grahamAvatar {
+    width: 2.8rem;
+    height: 2.8rem;
+  }
+
+  .grahamIntro p {
+    font-size: 0.78rem;
+  }
+
+  .dailyBriefing {
+    grid-template-columns: 1fr 1fr;
+    margin: 0 0 0.65rem;
+    padding: 0.5rem 0.7rem;
+  }
+
+  .dailyBriefing > p,
+  .briefingIncident {
+    display: none;
+  }
+
+  .dailyBriefing header {
+    grid-column: 1;
+  }
+
+  .dailyBriefing header > b {
+    display: none;
+  }
+
+  .briefingObjective {
+    justify-self: end;
+    text-align: right;
+  }
+
+  .cityPicker,
+  .playerIdentity,
+  .graphicsPicker {
+    margin: 0 0 0.65rem;
+    padding: 0.55rem;
+  }
+
+  .cityOptions button {
+    min-height: 3rem;
+    padding-block: 0.3rem;
+  }
+
+  .citySwatches {
+    height: 2rem;
+  }
+
+  .playerIdentity input {
+    height: 2.2rem;
+  }
+
+  .graphicsOptions button {
+    min-height: 2rem;
+  }
+
+  .primaryButton {
+    min-height: 3.35rem;
+  }
+
+  .shiftNote {
+    margin-top: 0.65rem;
+  }
+
+  .instructions {
+    margin-top: 3.2rem;
+  }
+}
+
 @media (max-width: 900px) {
   .home {
     grid-template-columns: 1fr;
@@ -1326,8 +1764,12 @@
     padding-inline: 0.5rem;
   }
 
+  .objectiveCard {
+    top: 4.65rem;
+  }
+
   .toast {
-    top: 5.2rem;
+    top: 8.9rem;
   }
 
   .gameOver {
@@ -1382,6 +1824,41 @@
 
   .grahamIntro p {
     font-size: 0.78rem;
+  }
+
+  .dailyBriefing {
+    grid-template-columns: 1fr;
+    margin: 0 0 1rem;
+  }
+
+  .dailyBriefing > p,
+  .briefingIncident {
+    display: grid;
+  }
+
+  .briefingIncident {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .cityPicker {
+    margin: 0 0 1rem;
+  }
+
+  .cityPicker legend small {
+    display: none;
+  }
+
+  .cityOptions {
+    grid-template-columns: 1fr;
+  }
+
+  .cityOptions button {
+    min-height: 3.5rem;
+  }
+
+  .citySwatches {
+    height: 2.35rem;
   }
 
   .playerIdentity {
@@ -1463,8 +1940,24 @@
     right: 0.5rem;
   }
 
+  .objectiveCard {
+    top: 3.35rem;
+    grid-template-columns: 1fr auto;
+    width: calc(100vw - 1rem);
+    padding: 0.48rem 0.58rem;
+  }
+
+  .objectiveCard .incidentStatus,
+  .ghostBadge {
+    display: none;
+  }
+
+  .objectiveProgress {
+    grid-column: 1 / -1;
+  }
+
   .toast {
-    top: 4.25rem;
+    top: 7.15rem;
     max-width: 86vw;
     white-space: nowrap;
     overflow: hidden;
@@ -1485,9 +1978,9 @@
 
   .touchControls {
     position: absolute;
-    right: 0.65rem;
-    bottom: 0.65rem;
-    left: 0.65rem;
+    right: max(0.65rem, env(safe-area-inset-right));
+    bottom: max(0.65rem, env(safe-area-inset-bottom));
+    left: max(0.65rem, env(safe-area-inset-left));
     z-index: 8;
     display: flex;
     align-items: end;
@@ -1519,6 +2012,30 @@
 
   .touchPad button:first-child {
     grid-column: 2;
+    grid-row: 1;
+  }
+
+  .touchPad .touchRun {
+    grid-column: 3;
+    grid-row: 1;
+    background: rgba(72, 214, 200, 0.78);
+    color: var(--ink);
+    font-size: 0.58rem;
+  }
+
+  .touchPad button:nth-child(3) {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .touchPad button:nth-child(4) {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .touchPad button:nth-child(5) {
+    grid-column: 3;
+    grid-row: 2;
   }
 
   .touchActions {

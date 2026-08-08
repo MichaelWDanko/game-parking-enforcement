@@ -16,11 +16,23 @@ export const scores = sqliteTable(
     score: integer("score").notNull(),
     tickets: integer("tickets").notNull(),
     boots: integer("boots").notNull(),
+    challengeId: text("challenge_id").notNull().default("classic"),
+    rulesetVersion: integer("ruleset_version").notNull().default(1),
+    objectiveId: text("objective_id"),
+    objectiveCompleted: integer("objective_completed", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    objectiveBonus: integer("objective_bonus").notNull().default(0),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
     uniqueIndex("scores_run_id_unique").on(table.runId),
     index("scores_rank_idx").on(table.score, table.createdAt),
+    index("scores_challenge_rank_idx").on(
+      table.challengeId,
+      table.score,
+      table.createdAt,
+    ),
   ],
 );
 

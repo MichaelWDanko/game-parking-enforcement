@@ -1,12 +1,26 @@
+import {
+  DAILY_RULESET_VERSION,
+  dailyChallengeForDate,
+} from "../../daily-dispatch";
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const strictDecoder = new TextDecoder("utf-8", { fatal: true });
 
+const DAILY_CHALLENGE_PATTERN =
+  /^daily-(\d{4})-(\d{2})-(\d{2})-v([1-9]\d{0,2})$/u;
+const SESSION_REQUEST_FIELDS = new Set(["challengeId", "rulesetVersion"]);
+const ONE_DAY_MILLISECONDS = 86_400_000;
+
 export const SCORE_LIMITS = {
   bodyBytes: 2_048,
+  sessionBodyBytes: 512,
   maxNameLength: 18,
   maxTickets: 24,
   maxBoots: 24,
+  maxScore: 16_000,
+  maxObjectiveBonus: 2_000,
+  maxObjectiveIdLength: 48,
   maxAcceptedPerHour: 10,
   retainedScores: 500,
   minimumSessionAgeSeconds: 75,
@@ -14,10 +28,12 @@ export const SCORE_LIMITS = {
 } as const;
 
 type ShiftSessionClaims = {
-  version: 1;
+  version: 2;
   runId: string;
   sourceHash: string;
   issuedAt: number;
+  challengeId: string;
+  rulesetVersion: number;
 };
 
 export class ScoreRequestError extends Error {
@@ -49,6 +65,87 @@ export function scoreResponse(body: unknown, status = 200) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseDailyChallengeId(value: string) {
+  const match = DAILY_CHALLENGE_PATTERN.exec(value);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const rulesetVersion = Number(match[4]);
+  const timestamp = Date.UTC(year, month - 1, day);
+  const date = new Date(timestamp);
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  return { rulesetVersion, timestamp };
+}
+
+export function validateChallengeId(value: unknown) {
+  if (value === "classic") return value;
+  if (typeof value !== "string" || !parseDailyChallengeId(value)) {
+    throw new ScoreRequestError(400, "That leaderboard challenge is not valid.");
+  }
+  return value;
+}
+
+export function expectedDailyChallenge(challengeId: string) {
+  const parsed = parseDailyChallengeId(challengeId);
+  if (!parsed) return null;
+  const date = new Date(parsed.timestamp).toISOString().slice(0, 10);
+  const challenge = dailyChallengeForDate(date);
+  return challenge.id === challengeId
+    ? { ...challenge, rulesetVersion: parsed.rulesetVersion }
+    : null;
+}
+
+export function validateDailySessionPayload(payload: Record<string, unknown>) {
+  if (Object.keys(payload).some((key) => !SESSION_REQUEST_FIELDS.has(key))) {
+    throw new ScoreRequestError(
+      400,
+      "The shift session request contains unsupported fields.",
+    );
+  }
+
+  const challengeId = validateChallengeId(payload.challengeId);
+  const parsedChallenge = parseDailyChallengeId(challengeId);
+  if (
+    !parsedChallenge ||
+    typeof payload.rulesetVersion !== "number" ||
+    !Number.isSafeInteger(payload.rulesetVersion) ||
+    payload.rulesetVersion !== DAILY_RULESET_VERSION ||
+    parsedChallenge.rulesetVersion !== payload.rulesetVersion
+  ) {
+    throw new ScoreRequestError(400, "That daily challenge is not valid.");
+  }
+
+  const now = new Date();
+  const currentUtcDay = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+  );
+  if (
+    parsedChallenge.timestamp !== currentUtcDay &&
+    parsedChallenge.timestamp !== currentUtcDay - ONE_DAY_MILLISECONDS
+  ) {
+    throw new ScoreRequestError(
+      400,
+      "Only the current or previous daily challenge can start a ranked shift.",
+    );
+  }
+
+  return {
+    challengeId,
+    rulesetVersion: payload.rulesetVersion,
+  };
 }
 
 function base64UrlEncode(bytes: Uint8Array) {
@@ -125,14 +222,20 @@ async function sessionSignature(encodedClaims: string, key: CryptoKey) {
   return new Uint8Array(signature);
 }
 
-export async function issueShiftSession(request: Request) {
+export async function issueShiftSession(
+  request: Request,
+  payload: Record<string, unknown>,
+) {
+  const challenge = validateDailySessionPayload(payload);
   const key = await getScoreboardKey();
   const issuedAt = Math.floor(Date.now() / 1_000);
   const claims: ShiftSessionClaims = {
-    version: 1,
+    version: 2,
     runId: crypto.randomUUID(),
     sourceHash: await sourceHash(request, key),
     issuedAt,
+    challengeId: challenge.challengeId,
+    rulesetVersion: challenge.rulesetVersion,
   };
   const encodedClaims = base64UrlEncode(encoder.encode(JSON.stringify(claims)));
   const signature = await sessionSignature(encodedClaims, key);
@@ -143,6 +246,8 @@ export async function issueShiftSession(request: Request) {
       runId: claims.runId,
       issuedAt,
       token,
+      challengeId: claims.challengeId,
+      rulesetVersion: claims.rulesetVersion,
     },
   };
 }
@@ -182,7 +287,7 @@ export async function verifyShiftSession(
   }
   if (
     !isRecord(claims) ||
-    claims.version !== 1 ||
+    claims.version !== 2 ||
     typeof claims.runId !== "string" ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
       claims.runId,
@@ -190,7 +295,14 @@ export async function verifyShiftSession(
     typeof claims.sourceHash !== "string" ||
     claims.sourceHash !== expectedSourceHash ||
     typeof claims.issuedAt !== "number" ||
-    !Number.isSafeInteger(claims.issuedAt)
+    !Number.isSafeInteger(claims.issuedAt) ||
+    typeof claims.challengeId !== "string" ||
+    !parseDailyChallengeId(claims.challengeId) ||
+    typeof claims.rulesetVersion !== "number" ||
+    !Number.isSafeInteger(claims.rulesetVersion) ||
+    claims.rulesetVersion !== DAILY_RULESET_VERSION ||
+    parseDailyChallengeId(claims.challengeId)?.rulesetVersion !==
+      claims.rulesetVersion
   ) {
     throw new ScoreRequestError(400, "This shift session is not valid.");
   }
@@ -214,10 +326,15 @@ export async function verifyShiftSession(
     sourceHash: claims.sourceHash,
     issuedAt: claims.issuedAt,
     ageSeconds,
+    challengeId: claims.challengeId,
+    rulesetVersion: claims.rulesetVersion,
   };
 }
 
-export async function readJsonObject(request: Request) {
+export async function readJsonObject(
+  request: Request,
+  maximumBytes: number = SCORE_LIMITS.bodyBytes,
+) {
   const contentType = request.headers.get("Content-Type") ?? "";
   if (contentType.split(";", 1)[0].trim().toLowerCase() !== "application/json") {
     throw new ScoreRequestError(415, "Scores must be sent as JSON.");
@@ -227,7 +344,7 @@ export async function readJsonObject(request: Request) {
   if (
     declaredLength &&
     (!/^\d+$/u.test(declaredLength) ||
-      Number(declaredLength) > SCORE_LIMITS.bodyBytes)
+      Number(declaredLength) > maximumBytes)
   ) {
     throw new ScoreRequestError(413, "The score request is too large.");
   }
@@ -244,7 +361,7 @@ export async function readJsonObject(request: Request) {
       const { done, value } = await reader.read();
       if (done) break;
       totalBytes += value.byteLength;
-      if (totalBytes > SCORE_LIMITS.bodyBytes) {
+      if (totalBytes > maximumBytes) {
         await reader.cancel();
         throw new ScoreRequestError(413, "The score request is too large.");
       }

@@ -1,12 +1,14 @@
-import { asc, count, desc, eq, gt } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt } from "drizzle-orm";
 import { getD1, getDb } from "../../../db";
 import { scores } from "../../../db/schema";
 import {
+  expectedDailyChallenge,
   readJsonObject,
   SCORE_LIMITS,
   ScoreboardConfigurationError,
   ScoreRequestError,
   scoreResponse,
+  validateChallengeId,
   verifyShiftSession,
 } from "./server";
 
@@ -18,6 +20,11 @@ const EXPECTED_SCORE_FIELDS = new Set([
   "score",
   "tickets",
   "boots",
+  "challengeId",
+  "rulesetVersion",
+  "objectiveId",
+  "objectiveCompleted",
+  "objectiveBonus",
 ]);
 
 type ValidatedScorePayload = {
@@ -28,6 +35,11 @@ type ValidatedScorePayload = {
   score: number;
   tickets: number;
   boots: number;
+  challengeId: string;
+  rulesetVersion: number;
+  objectiveId: string | null;
+  objectiveCompleted: boolean;
+  objectiveBonus: number;
 };
 
 function normalizeName(value: unknown) {
@@ -56,6 +68,19 @@ function isIntegerInRange(
   );
 }
 
+function validateObjectiveId(value: unknown) {
+  if (value === null) return null;
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > SCORE_LIMITS.maxObjectiveIdLength ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(value)
+  ) {
+    throw new ScoreRequestError(400, "That dispatch objective is not valid.");
+  }
+  return value;
+}
+
 function validatePayload(
   payload: Record<string, unknown>,
 ): ValidatedScorePayload {
@@ -67,6 +92,8 @@ function validatePayload(
   }
 
   const playerName = normalizeName(payload.playerName);
+  const challengeId = validateChallengeId(payload.challengeId);
+  const objectiveId = validateObjectiveId(payload.objectiveId);
   if (
     typeof payload.runId !== "string" ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
@@ -86,9 +113,16 @@ function validatePayload(
     );
   }
   if (
-    !isIntegerInRange(payload.score, 0, 14_000) ||
+    !isIntegerInRange(payload.score, 0, SCORE_LIMITS.maxScore) ||
     !isIntegerInRange(payload.tickets, 0, SCORE_LIMITS.maxTickets) ||
     !isIntegerInRange(payload.boots, 0, SCORE_LIMITS.maxBoots) ||
+    !isIntegerInRange(payload.rulesetVersion, 1, 999) ||
+    typeof payload.objectiveCompleted !== "boolean" ||
+    !isIntegerInRange(
+      payload.objectiveBonus,
+      0,
+      SCORE_LIMITS.maxObjectiveBonus,
+    ) ||
     payload.boots > payload.tickets ||
     payload.score % 5 !== 0
   ) {
@@ -98,11 +132,33 @@ function validatePayload(
     );
   }
 
+  if (
+    (!payload.objectiveCompleted && payload.objectiveBonus !== 0) ||
+    (objectiveId === null &&
+      (payload.objectiveCompleted || payload.objectiveBonus !== 0))
+  ) {
+    throw new ScoreRequestError(
+      400,
+      "That objective result does not match the shift results.",
+    );
+  }
+
+  const expectedChallenge = expectedDailyChallenge(challengeId);
+  if (
+    !expectedChallenge ||
+    payload.rulesetVersion !== expectedChallenge.rulesetVersion ||
+    objectiveId !== expectedChallenge.objective.id ||
+    payload.objectiveBonus !==
+      (payload.objectiveCompleted ? expectedChallenge.bonus : 0)
+  ) {
+    throw new ScoreRequestError(400, "That objective result does not match dispatch.");
+  }
+
   const maximumTicketScore =
     payload.tickets * 100 +
     10 * payload.tickets * (payload.tickets - 1);
   const maximumPossibleScore =
-    maximumTicketScore + payload.boots * 250;
+    maximumTicketScore + payload.boots * 250 + payload.objectiveBonus;
   if (payload.score > maximumPossibleScore) {
     throw new ScoreRequestError(
       400,
@@ -118,6 +174,11 @@ function validatePayload(
     score: payload.score,
     tickets: payload.tickets,
     boots: payload.boots,
+    challengeId,
+    rulesetVersion: payload.rulesetVersion,
+    objectiveId,
+    objectiveCompleted: payload.objectiveCompleted,
+    objectiveBonus: payload.objectiveBonus,
   };
 }
 
@@ -128,21 +189,48 @@ function publicScore(row: typeof scores.$inferSelect) {
     score: row.score,
     tickets: row.tickets,
     boots: row.boots,
+    challengeId: row.challengeId,
+    rulesetVersion: row.rulesetVersion,
+    objectiveId: row.objectiveId,
+    objectiveCompleted: row.objectiveCompleted,
+    objectiveBonus: row.objectiveBonus,
     createdAt: row.createdAt,
   };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const challengeParams = new URL(request.url).searchParams.getAll(
+      "challengeId",
+    );
+    if (challengeParams.length > 1) {
+      throw new ScoreRequestError(
+        400,
+        "Only one leaderboard challenge can be requested.",
+      );
+    }
+    const challengeId = challengeParams.length
+      ? validateChallengeId(challengeParams[0])
+      : null;
     const db = await getDb();
-    const rows = await db
-      .select()
-      .from(scores)
-      .orderBy(desc(scores.score), asc(scores.createdAt), asc(scores.id))
-      .limit(10);
+    const rows = challengeId
+      ? await db
+          .select()
+          .from(scores)
+          .where(eq(scores.challengeId, challengeId))
+          .orderBy(desc(scores.score), asc(scores.createdAt), asc(scores.id))
+          .limit(10)
+      : await db
+          .select()
+          .from(scores)
+          .orderBy(desc(scores.score), asc(scores.createdAt), asc(scores.id))
+          .limit(10);
 
     return scoreResponse({ scores: rows.map(publicScore) });
-  } catch {
+  } catch (error) {
+    if (error instanceof ScoreRequestError) {
+      return scoreResponse({ error: error.message }, error.status);
+    }
     return scoreResponse(
       { error: "The global scores are temporarily unavailable." },
       503,
@@ -158,7 +246,9 @@ export async function POST(request: Request) {
     session = await verifyShiftSession(validated.token, request);
     if (
       validated.runId !== session.runId ||
-      validated.issuedAt !== session.issuedAt
+      validated.issuedAt !== session.issuedAt ||
+      validated.challengeId !== session.challengeId ||
+      validated.rulesetVersion !== session.rulesetVersion
     ) {
       throw new ScoreRequestError(
         400,
@@ -209,8 +299,9 @@ export async function POST(request: Request) {
       d1
         .prepare(
           `INSERT INTO scores
-            (run_id, player_name, score, tickets, boots)
-           SELECT ?, ?, ?, ?, ?
+            (run_id, player_name, score, tickets, boots, challenge_id,
+             ruleset_version, objective_id, objective_completed, objective_bonus)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
            WHERE EXISTS (
              SELECT 1
              FROM score_rate_limits
@@ -224,6 +315,11 @@ export async function POST(request: Request) {
           validated.score,
           validated.tickets,
           validated.boots,
+          validated.challengeId,
+          validated.rulesetVersion,
+          validated.objectiveId,
+          validated.objectiveCompleted ? 1 : 0,
+          validated.objectiveBonus,
           session.runId,
           session.sourceHash,
         ),
@@ -248,7 +344,12 @@ export async function POST(request: Request) {
     const [{ totalAbove }] = await db
       .select({ totalAbove: count() })
       .from(scores)
-      .where(gt(scores.score, stored.score));
+      .where(
+        and(
+          eq(scores.challengeId, stored.challengeId),
+          gt(scores.score, stored.score),
+        ),
+      );
 
     await d1.batch([
       d1
@@ -257,11 +358,12 @@ export async function POST(request: Request) {
            WHERE id IN (
              SELECT id
              FROM scores
+             WHERE challenge_id = ?
              ORDER BY score DESC, created_at ASC, id ASC
              LIMIT -1 OFFSET ?
            )`,
         )
-        .bind(SCORE_LIMITS.retainedScores),
+        .bind(stored.challengeId, SCORE_LIMITS.retainedScores),
       d1
         .prepare("DELETE FROM score_rate_limits WHERE created_at < ?")
         .bind(rateWindowStart),

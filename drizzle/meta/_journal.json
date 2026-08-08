@@ -15,6 +15,13 @@
       "when": 1785111041253,
       "tag": "0001_supreme_the_initiative",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1786156035246,
+      "tag": "0002_flowery_saracen",
+      "breakpoints": true
     }
   ]
 }

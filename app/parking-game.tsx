@@ -1,7 +1,37 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import * as THREE from "three";
+import {
+  CITY_THEME_BY_ID,
+  CITY_THEMES,
+  DEFAULT_CITY_ID,
+  colorToCss,
+  isCityId,
+  type CityId,
+} from "./city-themes";
+import {
+  DAILY_RULESET_VERSION,
+  FIXED_STEP_SECONDS,
+  GHOST_RUN_VERSION,
+  SHIFT_DURATION_SECONDS,
+  createSeededRandom,
+  dailyChallengeForDate,
+  evaluateObjective,
+  sampleGhostAt,
+  type GhostRun,
+  type ObjectiveEvaluation,
+  type ObjectiveMetrics,
+} from "./daily-dispatch";
+import { GameFeedback, firstConnectedGamepad } from "./game-feedback";
+import { loadPersonalBestGhost, savePersonalBestGhost } from "./ghost-store";
 import styles from "./parking-game.module.css";
 import {
   nearestTrafficGap,
@@ -17,6 +47,7 @@ type Screen = "loading" | "home" | "playing" | "gameover";
 type ActionKind = "ticket" | "lookup" | "boot";
 type KeyboardScheme = "arrows" | "wasd";
 type GraphicsMode = "auto" | "performance" | "balanced" | "quality";
+type BoardScope = "daily" | "all";
 
 type GraphicsProfile = {
   label: string;
@@ -24,7 +55,6 @@ type GraphicsProfile = {
   shadows: boolean;
   fogNear: number;
   fogFar: number;
-  trafficCount: number;
   details: boolean;
 };
 
@@ -82,6 +112,7 @@ type CarContext = {
   lookedUp: boolean;
   ticketed: boolean;
   booted: boolean;
+  priority: boolean;
 } | null;
 
 type GameResult = {
@@ -92,9 +123,20 @@ type GameResult = {
   tickets: number;
   boots: number;
   best: number;
+  challengeId: string;
+  rulesetVersion: number;
+  objectiveId: string;
+  objectiveCompleted: boolean;
+  objectiveBonus: number;
+  ranked: boolean;
+  rankedReason: string;
+  ghostSaved: boolean;
 };
 
-type ShiftSession = Pick<GameResult, "runId" | "issuedAt" | "token">;
+type ShiftSession = Pick<
+  GameResult,
+  "runId" | "issuedAt" | "token" | "challengeId" | "rulesetVersion"
+>;
 
 type GlobalScore = {
   entryId: string;
@@ -102,6 +144,11 @@ type GlobalScore = {
   score: number;
   tickets: number;
   boots: number;
+  challengeId: string;
+  rulesetVersion: number;
+  objectiveId: string | null;
+  objectiveCompleted: boolean;
+  objectiveBonus: number;
   createdAt: string;
 };
 
@@ -120,6 +167,7 @@ type CarData = {
   ticketed: boolean;
   booted: boolean;
   lookedUp: boolean;
+  priority: boolean;
   phase: "arriving" | "parked" | "leaving";
   phaseTime: number;
   driveRate: number;
@@ -143,6 +191,13 @@ type MovingCar = {
   speed: number;
   cruiseSpeed: number;
   axis: TrafficAxis;
+  initialPosition: THREE.Vector3;
+};
+
+type BuildingThemeTarget = {
+  body: THREE.MeshStandardMaterial;
+  accents: THREE.MeshStandardMaterial[];
+  index: number;
 };
 
 const INITIAL_STATS: Stats = {
@@ -150,11 +205,10 @@ const INITIAL_STATS: Stats = {
   tickets: 0,
   boots: 0,
   combo: 0,
-  timeLeft: 90,
+  timeLeft: SHIFT_DURATION_SECONDS,
   fps: 60,
 };
 
-const CAR_COLORS = [0xff6577, 0x48d6c8, 0x7667e8, 0xffa447, 0x3e8bea, 0xf3f0d0];
 const PLATE_STARTS = ["ZIP", "MTR", "BEEP", "PARK", "TKT", "VROOM", "CITY"];
 const PUBLIC_BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
@@ -165,7 +219,6 @@ const GRAPHICS_PROFILES: Record<Exclude<GraphicsMode, "auto">, GraphicsProfile> 
     shadows: false,
     fogNear: 30,
     fogFar: 64,
-    trafficCount: 2,
     details: false,
   },
   balanced: {
@@ -174,7 +227,6 @@ const GRAPHICS_PROFILES: Record<Exclude<GraphicsMode, "auto">, GraphicsProfile> 
     shadows: true,
     fogNear: 44,
     fogFar: 88,
-    trafficCount: 4,
     details: true,
   },
   quality: {
@@ -183,7 +235,6 @@ const GRAPHICS_PROFILES: Record<Exclude<GraphicsMode, "auto">, GraphicsProfile> 
     shadows: true,
     fogNear: 56,
     fogFar: 118,
-    trafficCount: 6,
     details: true,
   },
 };
@@ -246,6 +297,21 @@ function addShadow(mesh: THREE.Object3D) {
       child.receiveShadow = true;
     }
   });
+}
+
+function disposeObject(root: THREE.Object3D) {
+  const geometries = new Set<THREE.BufferGeometry>();
+  const materials = new Set<THREE.Material>();
+
+  root.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+    geometries.add(child.geometry);
+    const childMaterials = Array.isArray(child.material) ? child.material : [child.material];
+    childMaterials.forEach((material) => materials.add(material));
+  });
+
+  geometries.forEach((geometry) => geometry.dispose());
+  materials.forEach((material) => material.dispose());
 }
 
 function createOfficer() {
@@ -339,6 +405,7 @@ function createCar(color: number) {
   const roof = roundedBox(1.78, 0.12, 1.6, color, 0.5);
   roof.position.set(0, 1.57, -0.2);
   car.add(roof);
+  car.userData.paintMaterials = [body.material, roof.material];
 
   const bumperMaterial = new THREE.MeshStandardMaterial({ color: 0x26364b, roughness: 0.7 });
   const wheelGeometry = new THREE.CylinderGeometry(0.42, 0.42, 0.28, 12);
@@ -387,9 +454,9 @@ function createMeter(side: number) {
   return { group, light };
 }
 
-function makePlate() {
-  const word = PLATE_STARTS[Math.floor(Math.random() * PLATE_STARTS.length)];
-  return `${word}-${Math.floor(100 + Math.random() * 900)}`;
+function makePlate(random: () => number) {
+  const word = PLATE_STARTS[Math.floor(random() * PLATE_STARTS.length)];
+  return `${word}-${Math.floor(100 + random() * 900)}`;
 }
 
 function formatMeter(seconds: number) {
@@ -419,6 +486,7 @@ async function fetchWithTimeout(
 }
 
 export function ParkingGame() {
+  const dailyChallenge = useMemo(() => dailyChallengeForDate(), []);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const keysRef = useRef(new Set<string>());
   const actionsRef = useRef<((kind: ActionKind) => void) | null>(null);
@@ -427,9 +495,12 @@ export function ParkingGame() {
   const gameActiveRef = useRef(false);
   const audioOnRef = useRef(true);
   const applyGraphicsRef = useRef<((mode: GraphicsMode) => void) | null>(null);
+  const applyCityRef = useRef<((cityId: CityId) => void) | null>(null);
+  const cityIdRef = useRef<CityId>(DEFAULT_CITY_ID);
   const lastSubmittedRunRef = useRef("");
   const submissionInFlightRef = useRef("");
   const shiftSessionRef = useRef<ShiftSession | null>(null);
+  const ghostRunRef = useRef<GhostRun | null>(null);
   const [screen, setScreen] = useState<Screen>("loading");
   const [loadProgress, setLoadProgress] = useState(0);
   const [stats, setStats] = useState<Stats>(INITIAL_STATS);
@@ -443,29 +514,58 @@ export function ParkingGame() {
     tickets: 0,
     boots: 0,
     best: 0,
+    challengeId: dailyChallenge.id,
+    rulesetVersion: DAILY_RULESET_VERSION,
+    objectiveId: dailyChallenge.objective.id,
+    objectiveCompleted: false,
+    objectiveBonus: 0,
+    ranked: false,
+    rankedReason: "Finish the full shift to enter the daily board.",
+    ghostSaved: false,
   });
   const [audioOn, setAudioOn] = useState(true);
+  const [controllerConnected, setControllerConnected] = useState(false);
   const [graphicsMode, setGraphicsMode] = useState<GraphicsMode>("auto");
   const graphicsModeRef = useRef<GraphicsMode>("auto");
   const [graphicsOpen, setGraphicsOpen] = useState(false);
   const [graphicsLabel, setGraphicsLabel] = useState("Auto");
-  const [streamStatus, setStreamStatus] = useState("Opening the downtown map");
+  const [cityId, setCityId] = useState<CityId>(DEFAULT_CITY_ID);
+  const [streamStatus, setStreamStatus] = useState(
+    `Opening the ${CITY_THEME_BY_ID[DEFAULT_CITY_ID].name} map`,
+  );
   const [playerName, setPlayerName] = useState("");
   const [nameError, setNameError] = useState("");
-  const [globalScores, setGlobalScores] = useState<GlobalScore[]>([]);
+  const [boardScope, setBoardScope] = useState<BoardScope>("daily");
+  const [scoresByScope, setScoresByScope] = useState<Record<BoardScope, GlobalScore[]>>({
+    daily: [],
+    all: [],
+  });
   const [scoresLoading, setScoresLoading] = useState(true);
   const [scoresError, setScoresError] = useState(false);
   const [lastSavedScore, setLastSavedScore] = useState<GlobalScore | null>(null);
   const [starting, setStarting] = useState(false);
+  const [ghostAvailable, setGhostAvailable] = useState(false);
+  const [objectiveStatus, setObjectiveStatus] = useState<ObjectiveEvaluation>(() =>
+    evaluateObjective(dailyChallenge.objective, {
+      tickets: 0,
+      boots: 0,
+      maxCombo: 0,
+      firstTicketAtSeconds: null,
+      distanceMeters: 0,
+    }),
+  );
   const [scoreStatus, setScoreStatus] = useState<ScoreStatus>({
     kind: "idle",
     message: "Your result will be added to the global board.",
   });
+  const city = CITY_THEME_BY_ID[cityId];
+  const globalScores = scoresByScope[boardScope];
 
   useEffect(() => {
     const saved = window.localStorage.getItem("meter-mayhem-graphics") as GraphicsMode | null;
     const savedName = window.localStorage.getItem("meter-mayhem-player-name");
-    if (!saved && !savedName) return;
+    const savedCity = window.localStorage.getItem("meter-mayhem-city");
+    if (!saved && !savedName && !savedCity) return;
     const timer = window.setTimeout(() => {
       if (saved && ["auto", "performance", "balanced", "quality"].includes(saved)) {
         graphicsModeRef.current = saved;
@@ -473,34 +573,60 @@ export function ParkingGame() {
         applyGraphicsRef.current?.(saved);
       }
       if (savedName) setPlayerName(savedName.slice(0, 18));
+      if (isCityId(savedCity)) {
+        cityIdRef.current = savedCity;
+        setCityId(savedCity);
+        applyCityRef.current?.(savedCity);
+      }
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
 
-  const refreshScores = useCallback(async () => {
+  useEffect(() => {
+    let cancelled = false;
+    void loadPersonalBestGhost(dailyChallenge.id).then((ghost) => {
+      if (cancelled) return;
+      const matchingGhost = ghost?.rulesetVersion === DAILY_RULESET_VERSION ? ghost : null;
+      ghostRunRef.current = matchingGhost;
+      setGhostAvailable(Boolean(matchingGhost));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [dailyChallenge.id]);
+
+  const refreshScores = useCallback(async (scope: BoardScope) => {
     setScoresLoading(true);
     setScoresError(false);
     try {
-      const response = await fetchWithTimeout("/api/scores", {
+      const query = scope === "daily"
+        ? `?challengeId=${encodeURIComponent(dailyChallenge.id)}`
+        : "";
+      const response = await fetchWithTimeout(`/api/scores${query}`, {
         headers: { Accept: "application/json" },
         cache: "no-store",
       });
       if (!response.ok) throw new Error("Scores unavailable");
       const payload = (await response.json()) as { scores?: GlobalScore[] };
-      setGlobalScores(Array.isArray(payload.scores) ? payload.scores.slice(0, 10) : []);
+      const nextScores = Array.isArray(payload.scores) ? payload.scores.slice(0, 10) : [];
+      setScoresByScope((current) => ({ ...current, [scope]: nextScores }));
     } catch {
       setScoresError(true);
     } finally {
       setScoresLoading(false);
     }
-  }, []);
+  }, [dailyChallenge.id]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void refreshScores(), 0);
+    const timer = window.setTimeout(() => void refreshScores(boardScope), 0);
     return () => window.clearTimeout(timer);
-  }, [refreshScores]);
+  }, [boardScope, refreshScores]);
 
   const submitScore = useCallback(async (gameResult: GameResult) => {
+    if (!gameResult.ranked) {
+      setScoreStatus({ kind: "idle", message: gameResult.rankedReason });
+      return;
+    }
     if (!gameResult.token) {
       setScoreStatus({
         kind: "error",
@@ -529,6 +655,11 @@ export function ParkingGame() {
           score: gameResult.score,
           tickets: gameResult.tickets,
           boots: gameResult.boots,
+          challengeId: gameResult.challengeId,
+          rulesetVersion: gameResult.rulesetVersion,
+          objectiveId: gameResult.objectiveId,
+          objectiveCompleted: gameResult.objectiveCompleted,
+          objectiveBonus: gameResult.objectiveBonus,
         }),
       });
       const payload = (await response.json()) as {
@@ -543,7 +674,8 @@ export function ParkingGame() {
         kind: "saved",
         message: payload.rank ? `Saved globally · rank #${payload.rank}` : "Saved globally",
       });
-      await refreshScores();
+      setBoardScope("daily");
+      await refreshScores("daily");
     } catch {
       setScoreStatus({
         kind: "error",
@@ -557,7 +689,7 @@ export function ParkingGame() {
   }, [playerName, refreshScores]);
 
   useEffect(() => {
-    if (screen !== "gameover" || !result.runId) return;
+    if (screen !== "gameover" || !result.runId || !result.ranked || !result.token) return;
     const timer = window.setTimeout(() => void submitScore(result), 0);
     return () => window.clearTimeout(timer);
   }, [result, screen, submitScore]);
@@ -577,11 +709,23 @@ export function ParkingGame() {
     applyGraphicsRef.current?.(mode);
   }, []);
 
+  const selectCity = useCallback((nextCityId: CityId) => {
+    cityIdRef.current = nextCityId;
+    setCityId(nextCityId);
+    window.localStorage.setItem("meter-mayhem-city", nextCityId);
+    applyCityRef.current?.(nextCityId);
+  }, []);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
+    const visualRandom = createSeededRandom(dailyChallenge.seed ^ 0xa341316c);
+    let gameplayRandom = createSeededRandom(dailyChallenge.seed);
+    let incidentRandom = createSeededRandom(dailyChallenge.seed ^ 0xc8013ea4);
+
     const initialProfile = resolveGraphicsProfile(graphicsModeRef.current);
+    const initialCityPalette = CITY_THEME_BY_ID[cityIdRef.current].palette;
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, initialProfile.pixelRatio));
     renderer.shadowMap.enabled = initialProfile.shadows;
@@ -591,16 +735,24 @@ export function ParkingGame() {
     renderer.toneMappingExposure = 1.08;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x7bdcf4);
-    scene.fog = new THREE.Fog(0x8de3f4, initialProfile.fogNear, initialProfile.fogFar);
+    scene.background = new THREE.Color(initialCityPalette.sky);
+    scene.fog = new THREE.Fog(
+      initialCityPalette.fog,
+      initialProfile.fogNear,
+      initialProfile.fogFar,
+    );
 
     const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 180);
     camera.position.set(14, 21, 19);
     const cameraTarget = new THREE.Vector3(0, 0, 7);
 
-    const hemi = new THREE.HemisphereLight(0xfff1bf, 0x7f87c7, 2.4);
+    const hemi = new THREE.HemisphereLight(
+      initialCityPalette.hemisphereSky,
+      initialCityPalette.hemisphereGround,
+      2.4,
+    );
     scene.add(hemi);
-    const sun = new THREE.DirectionalLight(0xfff0c8, 4.2);
+    const sun = new THREE.DirectionalLight(initialCityPalette.sunlight, 4.2);
     sun.position.set(-12, 24, 14);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -615,14 +767,17 @@ export function ParkingGame() {
 
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(116, 150),
-      new THREE.MeshStandardMaterial({ color: 0x88c96e, roughness: 1 }),
+      new THREE.MeshStandardMaterial({ color: initialCityPalette.ground, roughness: 1 }),
     );
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -0.07;
     ground.receiveShadow = true;
     world.add(ground);
 
-    const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x52657b, roughness: 0.96 });
+    const roadMaterial = new THREE.MeshStandardMaterial({
+      color: initialCityPalette.road,
+      roughness: 0.96,
+    });
     const mainRoad = new THREE.Mesh(
       new THREE.PlaneGeometry(13.8, 112),
       roadMaterial,
@@ -633,7 +788,10 @@ export function ParkingGame() {
     mainRoad.name = "Main Street";
     world.add(mainRoad);
 
-    const sidewalkMaterial = new THREE.MeshStandardMaterial({ color: 0xffc987, roughness: 1 });
+    const sidewalkMaterial = new THREE.MeshStandardMaterial({
+      color: initialCityPalette.sidewalk,
+      roughness: 1,
+    });
     for (const x of [-9.25, 9.25]) {
       const sidewalk = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.24, 112), sidewalkMaterial);
       sidewalk.position.set(x, 0.08, 0);
@@ -641,7 +799,7 @@ export function ParkingGame() {
       world.add(sidewalk);
     }
 
-    const stripeMaterial = new THREE.MeshBasicMaterial({ color: 0xffefb0 });
+    const stripeMaterial = new THREE.MeshBasicMaterial({ color: initialCityPalette.stripe });
     for (let z = -52; z <= 52; z += 8) {
       const stripe = new THREE.Mesh(new THREE.PlaneGeometry(0.18, 3.9), stripeMaterial);
       stripe.rotation.x = -Math.PI / 2;
@@ -685,7 +843,7 @@ export function ParkingGame() {
 
     const plaza = new THREE.Mesh(
       new THREE.BoxGeometry(30, 0.18, 18),
-      new THREE.MeshStandardMaterial({ color: 0xf6dca7, roughness: 0.95 }),
+      new THREE.MeshStandardMaterial({ color: initialCityPalette.plaza, roughness: 0.95 }),
     );
     plaza.position.set(29, 0.04, 46);
     plaza.receiveShadow = true;
@@ -693,10 +851,13 @@ export function ParkingGame() {
     world.add(plaza);
 
     const fountain = new THREE.Group();
-    const fountainStone = new THREE.MeshStandardMaterial({ color: 0xe8f1ef, roughness: 0.72 });
+    const fountainStone = new THREE.MeshStandardMaterial({
+      color: initialCityPalette.fountainStone,
+      roughness: 0.72,
+    });
     const fountainWater = new THREE.MeshStandardMaterial({
-      color: 0x54d5ee,
-      emissive: 0x198fae,
+      color: initialCityPalette.fountainWater,
+      emissive: initialCityPalette.fountainGlow,
       emissiveIntensity: 0.35,
       roughness: 0.18,
     });
@@ -728,6 +889,13 @@ export function ParkingGame() {
     const animatedTrees: THREE.Group[] = [];
     const qualityDetails: THREE.Object3D[] = [];
     const cameraOccluders: THREE.Group[] = [];
+    const buildingThemeTargets: BuildingThemeTarget[] = [];
+    const windowMaterials: THREE.MeshStandardMaterial[] = [];
+    const treeTrunkMaterials: THREE.MeshStandardMaterial[] = [];
+    const treeMaterials: THREE.MeshStandardMaterial[] = [];
+    const lampPoleMaterials: THREE.MeshStandardMaterial[] = [];
+    const lampBulbMaterials: THREE.MeshStandardMaterial[] = [];
+    const cloudMaterials: THREE.MeshStandardMaterial[] = [];
     const cameraRaycaster = new THREE.Raycaster();
     const cameraFocus = new THREE.Vector3();
     const cameraRay = new THREE.Vector3();
@@ -750,9 +918,11 @@ export function ParkingGame() {
       width: number,
       height: number,
       depth: number,
-      color: number,
-      accent: number,
     ) => {
+      const palette = CITY_THEME_BY_ID[cityIdRef.current].palette;
+      const themeIndex = buildingThemeTargets.length;
+      const color = palette.buildings[themeIndex % palette.buildings.length];
+      const accent = palette.accents[themeIndex % palette.accents.length];
       const group = new THREE.Group();
       const building = roundedBox(width, height, depth, color);
       building.position.y = height / 2;
@@ -762,13 +932,19 @@ export function ParkingGame() {
       awning.position.set(0, 2.2, -depth / 2 - 0.18);
       awning.rotation.x = -0.16;
       group.add(building, crown, awning);
+      buildingThemeTargets.push({
+        body: building.material,
+        accents: [crown.material, awning.material],
+        index: themeIndex,
+      });
 
       const windowMaterial = new THREE.MeshStandardMaterial({
-        color: 0xeafcff,
-        emissive: 0x6ad5e3,
+        color: palette.window,
+        emissive: palette.windowGlow,
         emissiveIntensity: 0.45,
         roughness: 0.28,
       });
+      windowMaterials.push(windowMaterial);
       const floorCount = Math.max(2, Math.floor(height / 2.8));
       for (let floor = 0; floor < floorCount; floor++) {
         for (const offset of [-width * 0.26, width * 0.26]) {
@@ -790,18 +966,18 @@ export function ParkingGame() {
     };
 
     [
-      [-39, -17, 11, 13, 9, 0xff6577, 0xffd45b],
-      [-24, -17, 10, 10, 9, 0x4f91df, 0x48d6c8],
-      [24, -17, 10, 15, 9, 0x7667e8, 0xf47cc3],
-      [39, -17, 11, 11, 9, 0xffad4a, 0xeafcff],
-      [-39, 17, 11, 12, 9, 0x48d6c8, 0x6658d9],
-      [-24, 17, 10, 16, 9, 0xff8b5c, 0xffd45b],
-      [24, 17, 10, 11, 9, 0x4f91df, 0xeafcff],
-      [39, 17, 11, 14, 9, 0xf47cc3, 0x48d6c8],
-      [-32, 48, 12, 13, 10, 0x7667e8, 0xffd45b],
-      [-18, 48, 10, 10, 10, 0x48d6c8, 0xeafcff],
-    ].forEach(([x, z, width, height, depth, color, accent]) => {
-      addDistrictBuilding(x, z, width, height, depth, color, accent);
+      [-39, -17, 11, 13, 9],
+      [-24, -17, 10, 10, 9],
+      [24, -17, 10, 15, 9],
+      [39, -17, 11, 11, 9],
+      [-39, 17, 11, 12, 9],
+      [-24, 17, 10, 16, 9],
+      [24, 17, 10, 11, 9],
+      [39, 17, 11, 14, 9],
+      [-32, 48, 12, 13, 10],
+      [-18, 48, 10, 10, 10],
+    ].forEach(([x, z, width, height, depth]) => {
+      addDistrictBuilding(x, z, width, height, depth);
     });
 
     const createCityChunk = (data: WorldChunkData) => {
@@ -810,8 +986,10 @@ export function ParkingGame() {
 
       for (const item of data.buildings) {
         if (isCrossStreetZ(item.z)) continue;
-        const color = Number.parseInt(item.color.replace("#", ""), 16);
-        const accent = Number.parseInt(item.accent.replace("#", ""), 16);
+        const palette = CITY_THEME_BY_ID[cityIdRef.current].palette;
+        const themeIndex = buildingThemeTargets.length;
+        const color = palette.buildings[themeIndex % palette.buildings.length];
+        const accent = palette.accents[themeIndex % palette.accents.length];
         const buildingGroup = new THREE.Group();
         const building = roundedBox(item.width, item.height, item.depth, color);
         building.position.set(item.side * 17, item.height / 2, item.z);
@@ -829,13 +1007,19 @@ export function ParkingGame() {
         );
         awning.rotation.z = item.side * -0.18;
         buildingGroup.add(awning);
+        buildingThemeTargets.push({
+          body: building.material,
+          accents: [crown.material, awning.material],
+          index: themeIndex,
+        });
 
         const windowMaterial = new THREE.MeshStandardMaterial({
-          color: 0xeafcff,
-          emissive: 0x6ad5e3,
+          color: palette.window,
+          emissive: palette.windowGlow,
           emissiveIntensity: 0.5,
           roughness: 0.3,
         });
+        windowMaterials.push(windowMaterial);
         const floors = Math.max(2, Math.floor(item.height / 2.7));
         for (let floor = 0; floor < floors; floor++) {
           for (const offset of [-2.2, 0, 2.2]) {
@@ -858,48 +1042,61 @@ export function ParkingGame() {
 
       for (const item of data.trees) {
         if (isCrossStreetZ(item.z)) continue;
+        const palette = CITY_THEME_BY_ID[cityIdRef.current].palette;
         const tree = new THREE.Group();
+        const trunkMaterial = new THREE.MeshStandardMaterial({ color: palette.treeTrunk });
         const trunk = new THREE.Mesh(
           new THREE.CylinderGeometry(0.16, 0.24, 1.7, 8),
-          new THREE.MeshStandardMaterial({ color: 0x865938 }),
+          trunkMaterial,
         );
         trunk.position.y = 0.85;
+        const treeMaterial = new THREE.MeshStandardMaterial({
+          color: palette.trees[treeMaterials.length % palette.trees.length],
+          roughness: 0.94,
+        });
         const crown = new THREE.Mesh(
           new THREE.IcosahedronGeometry(1.1, 1),
-          new THREE.MeshStandardMaterial({
-            color: Number.parseInt(item.color.replace("#", ""), 16),
-            roughness: 0.94,
-          }),
+          treeMaterial,
         );
         crown.position.y = 2.2;
         tree.add(trunk, crown);
         tree.position.set(item.side * 10.4, 0.2, item.z);
         tree.userData.windPhase = item.z * 0.37 + item.side;
         addShadow(tree);
+        treeTrunkMaterials.push(trunkMaterial);
+        treeMaterials.push(treeMaterial);
         animatedTrees.push(tree);
         chunk.add(tree);
       }
 
       for (const item of data.lamps) {
         if (isCrossStreetZ(item.z)) continue;
+        const palette = CITY_THEME_BY_ID[cityIdRef.current].palette;
         const lamp = new THREE.Group();
+        const poleMaterial = new THREE.MeshStandardMaterial({
+          color: palette.lampPole,
+          metalness: 0.35,
+        });
         const pole = new THREE.Mesh(
           new THREE.CylinderGeometry(0.07, 0.11, 3.9, 10),
-          new THREE.MeshStandardMaterial({ color: 0x2d4059, metalness: 0.35 }),
+          poleMaterial,
         );
         pole.position.y = 1.95;
+        const bulbMaterial = new THREE.MeshStandardMaterial({
+          color: palette.lampBulb,
+          emissive: palette.lampGlow,
+          emissiveIntensity: 2.2,
+        });
         const bulb = new THREE.Mesh(
           new THREE.SphereGeometry(0.22, 12, 8),
-          new THREE.MeshStandardMaterial({
-            color: 0xffefaf,
-            emissive: 0xffbd45,
-            emissiveIntensity: 2.2,
-          }),
+          bulbMaterial,
         );
         bulb.position.y = 3.95;
         lamp.add(pole, bulb);
         lamp.position.set(item.side * 11.25, 0.2, item.z);
         addShadow(lamp);
+        lampPoleMaterials.push(poleMaterial);
+        lampBulbMaterials.push(bulbMaterial);
         qualityDetails.push(bulb);
         chunk.add(lamp);
       }
@@ -957,18 +1154,23 @@ export function ParkingGame() {
       world.add(chunk);
       loadedChunks.set(definition.id, chunk);
       loadingChunks.delete(definition.id);
-      setStreamStatus(`${loadedChunks.size}/${chunkManifest?.chunks.length ?? 5} city blocks ready`);
+      setStreamStatus(
+        `${loadedChunks.size}/${chunkManifest?.chunks.length ?? 5} ${
+          CITY_THEME_BY_ID[cityIdRef.current].name
+        } blocks ready`,
+      );
     };
 
     const clouds: THREE.Group[] = [];
     for (let index = 0; index < 7; index++) {
       const cloud = new THREE.Group();
       const cloudMaterial = new THREE.MeshStandardMaterial({
-        color: 0xffffff,
+        color: initialCityPalette.cloud,
         transparent: true,
         opacity: 0.72,
         roughness: 1,
       });
+      cloudMaterials.push(cloudMaterial);
       for (const [x, y, scale] of [
         [-1.1, 0, 1],
         [0, 0.15, 1.3],
@@ -988,21 +1190,19 @@ export function ParkingGame() {
 
     const motePositions = new Float32Array(90 * 3);
     for (let index = 0; index < 90; index++) {
-      motePositions[index * 3] = (Math.random() - 0.5) * 26;
-      motePositions[index * 3 + 1] = 0.4 + Math.random() * 7;
-      motePositions[index * 3 + 2] = (Math.random() - 0.5) * 105;
+      motePositions[index * 3] = (visualRandom() - 0.5) * 26;
+      motePositions[index * 3 + 1] = 0.4 + visualRandom() * 7;
+      motePositions[index * 3 + 2] = (visualRandom() - 0.5) * 105;
     }
     const moteGeometry = new THREE.BufferGeometry();
     moteGeometry.setAttribute("position", new THREE.BufferAttribute(motePositions, 3));
-    const motes = new THREE.Points(
-      moteGeometry,
-      new THREE.PointsMaterial({
-        color: 0xfff0a8,
-        size: 0.12,
-        transparent: true,
-        opacity: 0.58,
-      }),
-    );
+    const moteMaterial = new THREE.PointsMaterial({
+      color: initialCityPalette.mote,
+      size: 0.12,
+      transparent: true,
+      opacity: 0.58,
+    });
+    const motes = new THREE.Points(moteGeometry, moteMaterial);
     qualityDetails.push(motes);
     world.add(motes);
 
@@ -1062,27 +1262,122 @@ export function ParkingGame() {
     officer.root.position.set(-8.5, 0.15, -9);
     world.add(officer.root);
 
+    const ghostOfficer = officer.root.clone(true);
+    ghostOfficer.name = "Personal best ghost";
+    ghostOfficer.visible = false;
+    ghostOfficer.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      object.castShadow = false;
+      object.receiveShadow = false;
+      const sourceMaterials = Array.isArray(object.material)
+        ? object.material
+        : [object.material];
+      const ghostMaterials = sourceMaterials.map((sourceMaterial) => {
+        const material = sourceMaterial.clone();
+        material.transparent = true;
+        material.opacity = 0.24;
+        material.depthWrite = false;
+        return material;
+      });
+      object.material = Array.isArray(object.material) ? ghostMaterials : ghostMaterials[0];
+    });
+    world.add(ghostOfficer);
+
     const movingCars: MovingCar[] = [];
+    const initialCarColors = CITY_THEME_BY_ID[cityIdRef.current].palette.cars;
     for (let i = 0; i < 6; i++) {
-      const group = createCar(CAR_COLORS[(i + 2) % CAR_COLORS.length]);
+      const group = createCar(initialCarColors[(i + 2) % initialCarColors.length]);
       group.scale.setScalar(0.82);
       const lane = i % 2 === 0 ? -1.9 : 1.9;
       group.position.set(lane, 0.08, -50 + i * 20);
       if (lane > 0) group.rotation.y = Math.PI;
       world.add(group);
       const cruiseSpeed = lane < 0 ? 5.2 + i * 0.45 : -(5.2 + i * 0.45);
-      movingCars.push({ group, speed: cruiseSpeed, cruiseSpeed, axis: "z" });
+      movingCars.push({
+        group,
+        speed: cruiseSpeed,
+        cruiseSpeed,
+        axis: "z",
+        initialPosition: group.position.clone(),
+      });
     }
     for (let i = 0; i < 4; i++) {
-      const group = createCar(CAR_COLORS[(i + 4) % CAR_COLORS.length]);
+      const group = createCar(initialCarColors[(i + 4) % initialCarColors.length]);
       group.scale.setScalar(0.82);
       const lane = i % 2 === 0 ? -1.9 : 1.9;
       const speed = lane < 0 ? 5.6 + i * 0.4 : -(5.6 + i * 0.4);
       group.position.set(-48 + i * 30, 0.08, lane);
       group.rotation.y = speed > 0 ? Math.PI / 2 : -Math.PI / 2;
       world.add(group);
-      movingCars.push({ group, speed, cruiseSpeed: speed, axis: "x" });
+      movingCars.push({
+        group,
+        speed,
+        cruiseSpeed: speed,
+        axis: "x",
+        initialPosition: group.position.clone(),
+      });
     }
+
+    const repaintCar = (group: THREE.Group, color: number) => {
+      const materials = group.userData.paintMaterials as
+        | THREE.MeshStandardMaterial[]
+        | undefined;
+      materials?.forEach((material) => material.color.setHex(color));
+    };
+
+    const applyCity = (nextCityId: CityId) => {
+      const nextCity = CITY_THEME_BY_ID[nextCityId];
+      const palette = nextCity.palette;
+      if (scene.background instanceof THREE.Color) scene.background.setHex(palette.sky);
+      if (scene.fog instanceof THREE.Fog) scene.fog.color.setHex(palette.fog);
+      hemi.color.setHex(palette.hemisphereSky);
+      hemi.groundColor.setHex(palette.hemisphereGround);
+      sun.color.setHex(palette.sunlight);
+      ground.material.color.setHex(palette.ground);
+      roadMaterial.color.setHex(palette.road);
+      sidewalkMaterial.color.setHex(palette.sidewalk);
+      stripeMaterial.color.setHex(palette.stripe);
+      plaza.material.color.setHex(palette.plaza);
+      fountainStone.color.setHex(palette.fountainStone);
+      fountainWater.color.setHex(palette.fountainWater);
+      fountainWater.emissive.setHex(palette.fountainGlow);
+      moteMaterial.color.setHex(palette.mote);
+      cloudMaterials.forEach((material) => material.color.setHex(palette.cloud));
+      windowMaterials.forEach((material) => {
+        material.color.setHex(palette.window);
+        material.emissive.setHex(palette.windowGlow);
+      });
+      buildingThemeTargets.forEach((target) => {
+        target.body.color.setHex(
+          palette.buildings[target.index % palette.buildings.length],
+        );
+        target.accents.forEach((material) => {
+          material.color.setHex(palette.accents[target.index % palette.accents.length]);
+        });
+      });
+      treeTrunkMaterials.forEach((material) => material.color.setHex(palette.treeTrunk));
+      treeMaterials.forEach((material, index) => {
+        material.color.setHex(palette.trees[index % palette.trees.length]);
+      });
+      lampPoleMaterials.forEach((material) => material.color.setHex(palette.lampPole));
+      lampBulbMaterials.forEach((material) => {
+        material.color.setHex(palette.lampBulb);
+        material.emissive.setHex(palette.lampGlow);
+      });
+      movingCars.forEach((traffic, index) => {
+        repaintCar(traffic.group, palette.cars[(index + 2) % palette.cars.length]);
+      });
+      spots.forEach((spot, index) => {
+        if (spot.car) repaintCar(spot.car.group, palette.cars[index % palette.cars.length]);
+      });
+      if (chunkManifest) {
+        setStreamStatus(
+          `${loadedChunks.size}/${chunkManifest.chunks.length} ${nextCity.name} blocks ready`,
+        );
+      }
+    };
+    applyCityRef.current = applyCity;
+    applyCity(cityIdRef.current);
 
     const applyGraphics = (mode: GraphicsMode) => {
       const profile = resolveGraphicsProfile(mode);
@@ -1094,9 +1389,6 @@ export function ParkingGame() {
         scene.fog.near = profile.fogNear;
         scene.fog.far = profile.fogFar;
       }
-      movingCars.forEach((traffic, index) => {
-        traffic.group.visible = index < profile.trafficCount;
-      });
       qualityDetails.forEach((detail) => {
         detail.visible = profile.details;
       });
@@ -1128,7 +1420,7 @@ export function ParkingGame() {
       if (disposed) return;
       chunkManifest = manifest;
       setLoadProgress(18);
-      setStreamStatus(`Loading ${manifest.district}`);
+      setStreamStatus(`Loading ${CITY_THEME_BY_ID[cityIdRef.current].name}`);
       const initialChunks = manifest.chunks.filter((chunk) => chunk.initial);
       let completed = 0;
       await Promise.all(
@@ -1144,7 +1436,11 @@ export function ParkingGame() {
       await new Promise((resolve) => window.setTimeout(resolve, minimumWait));
       if (disposed) return;
       setLoadProgress(100);
-      setStreamStatus(`${loadedChunks.size}/${manifest.chunks.length} city blocks ready`);
+      setStreamStatus(
+        `${loadedChunks.size}/${manifest.chunks.length} ${
+          CITY_THEME_BY_ID[cityIdRef.current].name
+        } blocks ready`,
+      );
       window.setTimeout(() => {
         if (!disposed) setScreen("home");
       }, 180);
@@ -1171,6 +1467,27 @@ export function ParkingGame() {
     let fpsFrames = 0;
     let fpsTime = 0;
     let lastStreamCheck = 0;
+    let simulationAccumulator = 0;
+    let gamepadWasConnected = false;
+    let previousGamepadActions = { ticket: false, lookup: false, boot: false };
+    let objectiveMetrics: ObjectiveMetrics = {
+      tickets: 0,
+      boots: 0,
+      maxCombo: 0,
+      firstTicketAtSeconds: null,
+      distanceMeters: 0,
+    };
+    let objectiveEvaluation = evaluateObjective(dailyChallenge.objective, objectiveMetrics);
+    let objectiveAwarded = false;
+    let lastObjectiveKey = "";
+    let incidentApplied = false;
+    let incidentAnnounced = false;
+    let runRanked = false;
+    let rankedReason = "Finish the full shift to enter the daily board.";
+    let finishInProgress = false;
+    let activeGhost: GhostRun | null = null;
+    let recordedGhostSamples: GhostRun["samples"] = [];
+    let nextGhostSampleAt = 0;
 
     const isWalkable = (x: number, z: number) =>
       (Math.abs(x) <= 11.2 && Math.abs(z) <= 54) ||
@@ -1228,10 +1545,7 @@ export function ParkingGame() {
     const canOfficerStandAt = (x: number, z: number) => {
       if (!isWalkable(x, z)) return false;
       for (const traffic of movingCars) {
-        if (
-          traffic.group.visible &&
-          !officerClearsVehicle(x, z, traffic.group.position, traffic.axis)
-        ) {
+        if (!officerClearsVehicle(x, z, traffic.group.position, traffic.axis)) {
           return false;
         }
       }
@@ -1261,7 +1575,7 @@ export function ParkingGame() {
 
     const shouldBrakeForTraffic = (traffic: MovingCar, direction: number) => {
       const otherVehicles = movingCars
-        .filter((other) => other !== traffic && other.group.visible)
+        .filter((other) => other !== traffic)
         .map((other) => trafficPosition(other));
       return nearestTrafficGap(trafficPosition(traffic), direction, otherVehicles)
         < TRAFFIC_BRAKE_DISTANCE;
@@ -1272,41 +1586,34 @@ export function ParkingGame() {
       return movingCars.every(
         (other) =>
           other === traffic ||
-          !other.group.visible ||
           !trafficVehiclesOverlap(nextPosition, trafficPosition(other)),
       );
     };
 
-    const audioContextRef: { value: AudioContext | null } = { value: null };
-    const playTone = (frequency: number, duration: number, type: OscillatorType = "sine") => {
-      if (!audioOnRef.current) return;
-      try {
-        audioContextRef.value ??= new AudioContext();
-        const audio = audioContextRef.value;
-        const oscillator = audio.createOscillator();
-        const gain = audio.createGain();
-        oscillator.type = type;
-        oscillator.frequency.value = frequency;
-        gain.gain.setValueAtTime(0.0001, audio.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.09, audio.currentTime + 0.01);
-        gain.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + duration);
-        oscillator.connect(gain).connect(audio.destination);
-        oscillator.start();
-        oscillator.stop(audio.currentTime + duration);
-      } catch {
-        // Audio is optional and browser policies may block it.
-      }
+    const feedback = new GameFeedback();
+    const playCue = (
+      cue: Parameters<GameFeedback["play"]>[0],
+      position?: THREE.Vector3,
+    ) => {
+      feedback.setEnabled(audioOnRef.current);
+      feedback.play(
+        cue,
+        position ? { x: position.x, y: position.y, z: position.z } : undefined,
+      );
     };
 
     const removeCar = (spot: ParkingSpot) => {
       if (!spot.car) return;
-      world.remove(spot.car.group);
+      const removedGroup = spot.car.group;
+      world.remove(removedGroup);
+      disposeObject(removedGroup);
       spot.car = null;
-      spot.respawnAt = gameTime + 3 + Math.random() * 4;
+      spot.respawnAt = gameTime + 3 + gameplayRandom() * 4;
     };
 
     const spawnCar = (spot: ParkingSpot, initial = false) => {
-      const color = CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)];
+      const carColors = CITY_THEME_BY_ID[cityIdRef.current].palette.cars;
+      const color = carColors[Math.floor(gameplayRandom() * carColors.length)];
       const group = createCar(color);
       group.position.set(
         initial || spot.axis === "z" ? spot.x : -52,
@@ -1316,16 +1623,17 @@ export function ParkingGame() {
       group.rotation.y = spot.axis === "x" ? Math.PI / 2 : 0;
       world.add(group);
       const priorsPool = [0, 0, 1, 2, 3, 4, 5];
-      const overdue = initial && Math.random() < 0.46;
+      const overdue = initial && gameplayRandom() < 0.46;
       spot.car = {
-        plate: makePlate(),
-        priors: priorsPool[Math.floor(Math.random() * priorsPool.length)],
+        plate: makePlate(gameplayRandom),
+        priors: priorsPool[Math.floor(gameplayRandom() * priorsPool.length)],
         color,
-        expireAt: gameTime + (overdue ? -(2 + Math.random() * 8) : 6 + Math.random() * 20),
-        departAt: gameTime + 24 + Math.random() * 22,
+        expireAt: gameTime + (overdue ? -(2 + gameplayRandom() * 8) : 6 + gameplayRandom() * 20),
+        departAt: gameTime + 24 + gameplayRandom() * 22,
         ticketed: false,
         booted: false,
         lookedUp: false,
+        priority: false,
         phase: initial ? "parked" : "arriving",
         phaseTime: 0,
         driveRate: initial ? 0 : 1,
@@ -1344,9 +1652,113 @@ export function ParkingGame() {
       else spot.respawnAt = 4 + (index % 4) * 2;
     });
 
+    const orderedIncidentTargets = (minimum: number) => {
+      const candidates = spots.filter(
+        (spot) =>
+          spot.car &&
+          spot.car.phase === "parked" &&
+          !spot.car.ticketed &&
+          !spot.car.booted,
+      );
+      if (candidates.length < minimum) return [];
+      const startIndex = Math.floor(incidentRandom() * candidates.length);
+      return candidates.slice(startIndex).concat(candidates.slice(0, startIndex));
+    };
+
+    const applyDailyIncident = () => {
+      const incident = dailyChallenge.incident;
+      switch (incident.kind) {
+        case "meter-surge": {
+          const targets = orderedIncidentTargets(3).filter(
+            (spot) => (spot.car?.expireAt ?? 0) > gameTime,
+          );
+          if (targets.length < 3) return false;
+          targets.slice(0, 3).forEach((spot) => {
+            if (spot.car) spot.car.expireAt = gameTime - 1;
+          });
+          return true;
+        }
+        case "repeat-alert": {
+          const target = orderedIncidentTargets(1)[0]?.car;
+          if (!target) return false;
+          target.priors = Math.max(3, target.priors);
+          target.expireAt = gameTime - 1;
+          target.departAt = Math.max(
+            target.departAt,
+            gameTime + incident.durationSeconds,
+          );
+          return true;
+        }
+        case "rush-hour":
+          return true;
+        case "street-sweep": {
+          const targets = orderedIncidentTargets(1);
+          if (targets.length === 0) return false;
+          targets.forEach((spot) => {
+            if (!spot.car) return;
+            spot.car.departAt = Math.min(
+              spot.car.departAt,
+              gameTime + incident.durationSeconds,
+            );
+          });
+          return true;
+        }
+        case "priority-expiry": {
+          const target = orderedIncidentTargets(1)[0]?.car;
+          if (!target) return false;
+          target.priority = true;
+          target.expireAt = gameTime - 1;
+          target.departAt = Math.min(
+            target.departAt,
+            gameTime + incident.durationSeconds,
+          );
+          return true;
+        }
+      }
+    };
+
+    const reserveIncidentTargets = () => {
+      const incident = dailyChallenge.incident;
+      let count = 0;
+      if (incident.kind === "meter-surge") count = 3;
+      if (incident.kind === "repeat-alert" || incident.kind === "priority-expiry") {
+        count = 1;
+      }
+      if (count === 0) return;
+      spots
+        .filter((spot) => spot.car)
+        .slice(-count)
+        .forEach((spot) => {
+          if (!spot.car) return;
+          spot.car.expireAt = incident.startsAtSeconds + 10;
+          spot.car.departAt = Math.max(
+            spot.car.departAt,
+            incident.startsAtSeconds + incident.durationSeconds + 5,
+          );
+        });
+    };
+
     const pushStats = () => {
-      const timeLeft = Math.max(0, 90 - gameTime);
+      const timeLeft = Math.max(0, SHIFT_DURATION_SECONDS - gameTime);
       setStats({ score, tickets, boots, combo, timeLeft, fps: Math.round(fpsWindow) });
+    };
+
+    const pushObjective = (awardBonus = true) => {
+      const nextEvaluation = evaluateObjective(dailyChallenge.objective, objectiveMetrics);
+      const nextKey = `${nextEvaluation.complete}:${Math.floor(nextEvaluation.current * 10)}`;
+      const completedNow = awardBonus && nextEvaluation.complete && !objectiveAwarded;
+      objectiveEvaluation = nextEvaluation;
+      if (nextKey !== lastObjectiveKey) {
+        lastObjectiveKey = nextKey;
+        setObjectiveStatus(nextEvaluation);
+      }
+      if (completedNow) {
+        objectiveAwarded = true;
+        score += dailyChallenge.bonus;
+        setToast(`Dispatch objective complete +${dailyChallenge.bonus}`);
+        playCue("objective");
+        pushStats();
+      }
     };
 
     const pushContext = () => {
@@ -1360,6 +1772,7 @@ export function ParkingGame() {
               lookedUp: nearest.lookedUp,
               ticketed: nearest.ticketed,
               booted: nearest.booted,
+              priority: nearest.priority,
             }
           : null;
       const key = JSON.stringify(next);
@@ -1369,40 +1782,127 @@ export function ParkingGame() {
       }
     };
 
-    const finishGame = () => {
-      if (!gameActiveRef.current) return;
+    const finishGame = (completedShift: boolean) => {
+      if (!gameActiveRef.current || finishInProgress) return;
+      finishInProgress = true;
       gameActiveRef.current = false;
-      const previousBest = Number(window.localStorage.getItem("meter-mayhem-best") ?? 0);
-      const best = Math.max(previousBest, score);
-      window.localStorage.setItem("meter-mayhem-best", String(best));
+      const completedFullShift =
+        completedShift && gameTime >= SHIFT_DURATION_SECONDS - FIXED_STEP_SECONDS * 1.5;
+      if (!completedFullShift) {
+        runRanked = false;
+        rankedReason = "Practice result. Finish the full 90-second shift to rank.";
+      }
+      const bestKey = `meter-mayhem-best:${dailyChallenge.id}`;
+      const previousBest = Number(window.localStorage.getItem(bestKey) ?? 0);
+      const best = runRanked ? Math.max(previousBest, score) : previousBest;
+      if (runRanked) window.localStorage.setItem(bestKey, String(best));
       const session = shiftSessionRef.current;
-      setResult({
-        runId: session?.runId ?? crypto.randomUUID(),
+      const resultRunId = session?.runId ?? crypto.randomUUID();
+      const nextResult: GameResult = {
+        runId: resultRunId,
         issuedAt: session?.issuedAt ?? 0,
         token: session?.token ?? "",
         score,
         tickets,
         boots,
         best,
-      });
+        challengeId: session?.challengeId ?? dailyChallenge.id,
+        rulesetVersion: session?.rulesetVersion ?? DAILY_RULESET_VERSION,
+        objectiveId: dailyChallenge.objective.id,
+        objectiveCompleted: objectiveEvaluation.complete,
+        objectiveBonus: objectiveEvaluation.complete ? dailyChallenge.bonus : 0,
+        ranked: runRanked,
+        rankedReason,
+        ghostSaved: false,
+      };
+      setResult(nextResult);
+      if (!runRanked) {
+        setScoreStatus({ kind: "idle", message: rankedReason });
+      } else if (!session) {
+        setScoreStatus({
+          kind: "error",
+          message: "Dispatch was offline. Your daily best and ghost are still saved locally.",
+        });
+      }
       setScreen("gameover");
-      playTone(392, 0.16);
-      window.setTimeout(() => playTone(523, 0.3), 130);
+      playCue("finish");
+      ghostOfficer.visible = false;
+
+      if (
+        runRanked &&
+        recordedGhostSamples.length >= 2 &&
+        (!activeGhost || score > activeGhost.score)
+      ) {
+        const ghostRun: GhostRun = {
+          version: GHOST_RUN_VERSION,
+          challengeId: dailyChallenge.id,
+          rulesetVersion: DAILY_RULESET_VERSION,
+          score,
+          samples: recordedGhostSamples,
+        };
+        void savePersonalBestGhost(ghostRun).then((saved) => {
+          if (!saved) return;
+          ghostRunRef.current = ghostRun;
+          setGhostAvailable(true);
+          setResult((current) =>
+            current.runId === resultRunId ? { ...current, ghostSaved: true } : current,
+          );
+        });
+      }
     };
 
     const startGame = () => {
       spots.forEach((spot) => removeCar(spot));
+      gameplayRandom = createSeededRandom(dailyChallenge.seed);
+      incidentRandom = createSeededRandom(dailyChallenge.seed ^ 0xc8013ea4);
       gameTime = 0;
       score = 0;
       tickets = 0;
       boots = 0;
       combo = 0;
       lastTicketTime = -20;
+      objectiveMetrics = {
+        tickets: 0,
+        boots: 0,
+        maxCombo: 0,
+        firstTicketAtSeconds: null,
+        distanceMeters: 0,
+      };
+      objectiveEvaluation = evaluateObjective(dailyChallenge.objective, objectiveMetrics);
+      objectiveAwarded = false;
+      lastObjectiveKey = "";
+      incidentApplied = false;
+      incidentAnnounced = false;
+      runRanked = !document.hidden;
+      rankedReason = runRanked
+        ? "Ranked daily shift"
+        : "Practice result. The shift started while this tab was hidden.";
+      finishInProgress = false;
+      activeGhost = ghostRunRef.current?.challengeId === dailyChallenge.id
+        ? ghostRunRef.current
+        : null;
+      recordedGhostSamples = [
+        { timeSeconds: 0, x: -8.5, z: -9, rotation: 0 },
+      ];
+      nextGhostSampleAt = 0.1;
       keyboardScheme = "arrows";
       keysRef.current.clear();
       runningSpeed = 0;
+      simulationAccumulator = 0;
       officer.root.position.set(-8.5, 0.15, -9);
       officer.root.rotation.y = 0;
+      ghostOfficer.visible = Boolean(activeGhost);
+      if (activeGhost) {
+        const firstSample = sampleGhostAt(activeGhost, 0);
+        if (firstSample) {
+          ghostOfficer.position.set(firstSample.x, 0.15, firstSample.z);
+          ghostOfficer.rotation.y = firstSample.rotation;
+        }
+      }
+      movingCars.forEach((traffic) => {
+        traffic.group.position.copy(traffic.initialPosition);
+        traffic.speed = traffic.cruiseSpeed;
+      });
       spots.forEach((spot, index) => {
         if (index < 12) {
           spawnCar(spot, true);
@@ -1413,18 +1913,20 @@ export function ParkingGame() {
         }
         else spot.respawnAt = 4 + (index % 4) * 2;
       });
+      reserveIncidentTargets();
       pushStats();
+      pushObjective(false);
       setContext(null);
-      setToast("Find an expired meter");
+      setToast(dailyChallenge.objective.label);
       setLastSavedScore(null);
+      setBoardScope("daily");
       setScoreStatus({
         kind: "idle",
-        message: "Your result will be added to the global board.",
+        message: "Finish the full shift to enter today’s board.",
       });
       gameActiveRef.current = true;
       setScreen("playing");
-      playTone(440, 0.08, "square");
-      window.setTimeout(() => playTone(660, 0.15, "square"), 90);
+      playCue("start");
     };
 
     const addTicketVisual = (car: CarData) => {
@@ -1455,7 +1957,7 @@ export function ParkingGame() {
     const doAction = (kind: ActionKind) => {
       if (!gameActiveRef.current || !nearest || nearestDistance > 3.75 || nearest.phase !== "parked") {
         setToast("Move closer to a parked car");
-        playTone(170, 0.12, "sawtooth");
+        playCue("error");
         return;
       }
       const car = nearest;
@@ -1467,7 +1969,7 @@ export function ParkingGame() {
       if (kind === "lookup") {
         car.lookedUp = true;
         setToast(car.priors >= 3 ? `${car.plate}: repeat offender — boot eligible` : `${car.plate}: ${car.priors} prior violations`);
-        playTone(520, 0.08, "square");
+        playCue("lookup", car.group.position);
         pushContext();
         return;
       }
@@ -1475,48 +1977,54 @@ export function ParkingGame() {
       if (kind === "ticket") {
         if (car.ticketed) {
           setToast("Already ticketed this parking stay");
-          playTone(190, 0.1, "sawtooth");
+          playCue("error", car.group.position);
         } else if (car.expireAt > gameTime) {
           score = Math.max(0, score - 75);
           combo = 0;
           setToast("Too early! −75");
-          playTone(150, 0.2, "sawtooth");
+          playCue("error", car.group.position);
         } else {
           combo = gameTime - lastTicketTime <= 12 ? combo + 1 : 1;
           const points = 100 + Math.max(0, combo - 1) * 20;
           score += points;
           tickets += 1;
           lastTicketTime = gameTime;
+          objectiveMetrics.tickets = tickets;
+          objectiveMetrics.maxCombo = Math.max(objectiveMetrics.maxCombo, combo);
+          if (objectiveMetrics.firstTicketAtSeconds === null) {
+            objectiveMetrics.firstTicketAtSeconds = gameTime;
+          }
           car.ticketed = true;
           addTicketVisual(car);
           setToast(combo > 1 ? `Valid ticket +${points} · ${combo}× combo!` : `Valid ticket +${points}`);
-          playTone(740, 0.08, "square");
-          window.setTimeout(() => playTone(920, 0.12, "square"), 70);
+          playCue("ticket", car.group.position);
+          pushObjective();
         }
       }
 
       if (kind === "boot") {
         if (!car.lookedUp) {
           setToast("Look up the plate first");
-          playTone(190, 0.1, "sawtooth");
+          playCue("error", car.group.position);
         } else if (!car.ticketed) {
           setToast("Write the expired-meter ticket first");
-          playTone(190, 0.1, "sawtooth");
+          playCue("error", car.group.position);
         } else if (car.priors < 3) {
           score = Math.max(0, score - 150);
           combo = 0;
           setToast("Not a repeat offender! −150");
-          playTone(125, 0.22, "sawtooth");
+          playCue("error", car.group.position);
         } else if (car.booted) {
           setToast("This vehicle is already immobilized");
         } else {
           car.booted = true;
           boots += 1;
           score += 250;
+          objectiveMetrics.boots = boots;
           addBootVisual(car, spot);
           setToast("Boot secured +250");
-          playTone(260, 0.08, "square");
-          window.setTimeout(() => playTone(390, 0.16, "square"), 90);
+          playCue("boot", car.group.position);
+          pushObjective();
         }
       }
       pushStats();
@@ -1525,7 +2033,7 @@ export function ParkingGame() {
 
     actionsRef.current = doAction;
     startRef.current = startGame;
-    endRef.current = finishGame;
+    endRef.current = () => finishGame(false);
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)) {
@@ -1566,15 +2074,39 @@ export function ParkingGame() {
       }
     };
     const onKeyUp = (event: KeyboardEvent) => keysRef.current.delete(event.code);
+    const clearHeldInput = () => keysRef.current.clear();
+    const markInterrupted = () => {
+      clearHeldInput();
+      simulationAccumulator = 0;
+      lastTime = performance.now();
+      if (!gameActiveRef.current) return;
+      runRanked = false;
+      rankedReason = "Practice result. Leaving this tab made the shift ineligible for ranking.";
+      setToast("Shift paused · this run is now practice");
+    };
+    const onVisibilityChange = () => {
+      if (document.hidden) markInterrupted();
+      else {
+        simulationAccumulator = 0;
+        lastTime = performance.now();
+      }
+    };
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", clearHeldInput);
+    window.addEventListener("pagehide", markInterrupted);
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
+    let resizeFrame = 0;
     const resize = () => {
-      const width = canvas.clientWidth;
-      const height = canvas.clientHeight;
-      renderer.setSize(width, height, false);
-      camera.aspect = width / Math.max(height, 1);
-      camera.updateProjectionMatrix();
+      window.cancelAnimationFrame(resizeFrame);
+      resizeFrame = window.requestAnimationFrame(() => {
+        const width = canvas.clientWidth;
+        const height = canvas.clientHeight;
+        renderer.setSize(width, height, false);
+        camera.aspect = width / Math.max(height, 1);
+        camera.updateProjectionMatrix();
+      });
     };
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
@@ -1611,17 +2143,84 @@ export function ParkingGame() {
       if (disposed) return;
       requestAnimationFrame(render);
       const now = performance.now();
-      const rawDt = Math.min((now - lastTime) / 1000, 0.05);
+      const rawDt = Math.min((now - lastTime) / 1000, 0.25);
       lastTime = now;
-      const dt = Math.max(rawDt, 1 / 240);
-      elapsed += dt;
+      const frameDt = Math.max(rawDt, 1 / 240);
       fpsFrames += 1;
-      fpsTime += dt;
+      fpsTime += frameDt;
       if (fpsTime >= 0.5) {
         fpsWindow = damp(fpsWindow, fpsFrames / fpsTime, 5, fpsTime);
         fpsFrames = 0;
         fpsTime = 0;
       }
+
+      const gamepad = firstConnectedGamepad();
+      const gamepadConnected = Boolean(gamepad);
+      if (gamepadConnected !== gamepadWasConnected) {
+        gamepadWasConnected = gamepadConnected;
+        setControllerConnected(gamepadConnected);
+      }
+      const analogX = Math.abs(gamepad?.axes[0] ?? 0) >= 0.18
+        ? gamepad?.axes[0] ?? 0
+        : 0;
+      const analogZ = Math.abs(gamepad?.axes[1] ?? 0) >= 0.18
+        ? gamepad?.axes[1] ?? 0
+        : 0;
+      const gamepadAxisX = THREE.MathUtils.clamp(
+        analogX + (gamepad?.buttons[15]?.pressed ? 1 : 0) -
+          (gamepad?.buttons[14]?.pressed ? 1 : 0),
+        -1,
+        1,
+      );
+      const gamepadAxisZ = THREE.MathUtils.clamp(
+        analogZ + (gamepad?.buttons[13]?.pressed ? 1 : 0) -
+          (gamepad?.buttons[12]?.pressed ? 1 : 0),
+        -1,
+        1,
+      );
+      const gamepadActions = {
+        ticket: Boolean(gamepad?.buttons[0]?.pressed),
+        lookup: Boolean(gamepad?.buttons[2]?.pressed),
+        boot: Boolean(gamepad?.buttons[1]?.pressed),
+      };
+
+      simulationAccumulator = Math.min(
+        simulationAccumulator + rawDt,
+        0.25,
+      );
+      while (simulationAccumulator >= FIXED_STEP_SECONDS) {
+        const dt = FIXED_STEP_SECONDS;
+        elapsed += dt;
+
+        if (gameActiveRef.current) {
+          gameTime = Math.min(SHIFT_DURATION_SECONDS, gameTime + dt);
+          if (gameTime >= SHIFT_DURATION_SECONDS) {
+            pushStats();
+            finishGame(true);
+            simulationAccumulator = 0;
+            break;
+          }
+          if (
+            !incidentApplied &&
+            gameTime >= dailyChallenge.incident.startsAtSeconds &&
+            applyDailyIncident()
+          ) {
+            incidentApplied = true;
+            if (!incidentAnnounced) {
+              incidentAnnounced = true;
+              setToast(dailyChallenge.incident.message);
+              playCue("incident");
+            }
+          }
+        }
+
+        const rushHourActive =
+          gameActiveRef.current &&
+          dailyChallenge.incident.kind === "rush-hour" &&
+          gameTime >= dailyChallenge.incident.startsAtSeconds &&
+          gameTime <
+            dailyChallenge.incident.startsAtSeconds + dailyChallenge.incident.durationSeconds;
+        const trafficSpeedMultiplier = rushHourActive ? 1.3 : 1;
 
       for (const traffic of movingCars) {
         const coordinate = traffic.axis === "z" ? "z" : "x";
@@ -1635,7 +2234,7 @@ export function ParkingGame() {
         const braking = brakingForOfficer || brakingForTraffic;
         traffic.speed = damp(
           traffic.speed,
-          braking ? 0 : traffic.cruiseSpeed,
+          braking ? 0 : traffic.cruiseSpeed * trafficSpeedMultiplier,
           braking ? 7.5 : 2.4,
           dt,
         );
@@ -1693,20 +2292,32 @@ export function ParkingGame() {
       }
 
       if (gameActiveRef.current) {
-        gameTime += dt;
-        if (gameTime >= 90) finishGame();
+        if (gamepadActions.ticket && !previousGamepadActions.ticket) doAction("ticket");
+        if (gamepadActions.lookup && !previousGamepadActions.lookup) doAction("lookup");
+        if (gamepadActions.boot && !previousGamepadActions.boot) doAction("boot");
+        previousGamepadActions = gamepadActions;
 
         const keys = keysRef.current;
-        const inputX =
+        const keyboardX =
           (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) -
           (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0);
-        const inputZ =
+        const keyboardZ =
           (keys.has("KeyS") || keys.has("ArrowDown") ? 1 : 0) -
           (keys.has("KeyW") || keys.has("ArrowUp") ? 1 : 0);
+        const inputX = THREE.MathUtils.clamp(keyboardX + gamepadAxisX, -1, 1);
+        const inputZ = THREE.MathUtils.clamp(keyboardZ + gamepadAxisZ, -1, 1);
         const length = Math.hypot(inputX, inputZ);
-        const targetSpeed = length > 0 ? (keys.has("ShiftLeft") || keys.has("ShiftRight") ? 8.2 : 5.7) : 0;
+        const sprinting =
+          keys.has("ShiftLeft") ||
+          keys.has("ShiftRight") ||
+          Boolean(gamepad?.buttons[4]?.pressed) ||
+          Boolean(gamepad?.buttons[5]?.pressed) ||
+          Boolean(gamepad?.buttons[10]?.pressed);
+        const targetSpeed = length > 0 ? (sprinting ? 8.2 : 5.7) : 0;
         runningSpeed = damp(runningSpeed, targetSpeed, length > 0 ? 9 : 12, dt);
         if (length > 0) {
+          const previousX = officer.root.position.x;
+          const previousZ = officer.root.position.z;
           const moveX = inputX / length;
           const moveZ = inputZ / length;
           const nextX = officer.root.position.x + moveX * runningSpeed * dt;
@@ -1721,6 +2332,32 @@ export function ParkingGame() {
           }
           const targetAngle = Math.atan2(moveX, moveZ);
           officer.root.rotation.y = dampAngle(officer.root.rotation.y, targetAngle, 13, dt);
+          const acceptedDistance = Math.hypot(
+            officer.root.position.x - previousX,
+            officer.root.position.z - previousZ,
+          );
+          if (acceptedDistance > 0) {
+            objectiveMetrics.distanceMeters += acceptedDistance;
+            pushObjective();
+          }
+        }
+
+        if (activeGhost) {
+          const ghostSample = sampleGhostAt(activeGhost, gameTime);
+          if (ghostSample) {
+            ghostOfficer.visible = true;
+            ghostOfficer.position.set(ghostSample.x, 0.15, ghostSample.z);
+            ghostOfficer.rotation.y = ghostSample.rotation;
+          }
+        }
+        if (gameTime + FIXED_STEP_SECONDS / 2 >= nextGhostSampleAt) {
+          recordedGhostSamples.push({
+            timeSeconds: Number(gameTime.toFixed(3)),
+            x: officer.root.position.x,
+            z: officer.root.position.z,
+            rotation: officer.root.rotation.y,
+          });
+          nextGhostSampleAt += 0.1;
         }
 
         spots.forEach((spot) => {
@@ -1760,8 +2397,8 @@ export function ParkingGame() {
               car.phase = "parked";
               car.phaseTime = 0;
               car.driveRate = 0;
-              car.expireAt = gameTime + 7 + Math.random() * 18;
-              car.departAt = gameTime + 30 + Math.random() * 18;
+              car.expireAt = gameTime + 7 + gameplayRandom() * 18;
+              car.departAt = gameTime + 30 + gameplayRandom() * 18;
             }
           } else if (car.phase === "parked") {
             if (gameTime >= car.departAt && !car.booted) {
@@ -1795,7 +2432,10 @@ export function ParkingGame() {
           const expired = car.expireAt <= gameTime;
           meterMaterial.color.setHex(expired ? 0xff5368 : 0x48d6c8);
           meterMaterial.emissive.setHex(expired ? 0x8e1629 : 0x1a6e63);
-          spot.meterLight.scale.setScalar(expired ? 1 + Math.sin(elapsed * 7) * 0.12 : 1);
+          const pulseStrength = car.priority ? 0.24 : 0.12;
+          spot.meterLight.scale.setScalar(
+            expired ? 1 + Math.sin(elapsed * 7) * pulseStrength : 1,
+          );
         });
 
         nearest = null;
@@ -1814,12 +2454,13 @@ export function ParkingGame() {
         if (nearestDistance > 3.75) nearest = null;
         pushContext();
 
+        if (gameTime - lastTicketTime > 12 && combo > 0) combo = 0;
         if (now - lastStatsPush > 150) {
-          if (gameTime - lastTicketTime > 12 && combo > 0) combo = 0;
           pushStats();
           lastStatsPush = now;
         }
       } else {
+        previousGamepadActions = gamepadActions;
         runningSpeed = damp(runningSpeed, 0, 10, dt);
       }
 
@@ -1867,8 +2508,11 @@ export function ParkingGame() {
       );
       camera.position.lerp(desiredCamera, 1 - Math.exp(-3.5 * dt));
       camera.lookAt(cameraTarget.x, 1.3, cameraTarget.z - 1);
+      feedback.updateListener(camera.position);
 
       world.rotation.y = gameActiveRef.current ? 0 : Math.sin(elapsed * 0.18) * 0.025;
+        simulationAccumulator -= FIXED_STEP_SECONDS;
+      }
       updateCameraOcclusion();
       renderer.render(scene, camera);
     };
@@ -1877,8 +2521,12 @@ export function ParkingGame() {
     return () => {
       disposed = true;
       observer.disconnect();
+      window.cancelAnimationFrame(resizeFrame);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", clearHeldInput);
+      window.removeEventListener("pagehide", markInterrupted);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       renderer.dispose();
       scene.traverse((object) => {
         if (object instanceof THREE.Mesh) {
@@ -1887,13 +2535,14 @@ export function ParkingGame() {
           materials.forEach((material) => material.dispose());
         }
       });
-      audioContextRef.value?.close();
+      feedback.dispose();
       actionsRef.current = null;
       startRef.current = null;
       endRef.current = null;
       applyGraphicsRef.current = null;
+      applyCityRef.current = null;
     };
-  }, []);
+  }, [dailyChallenge]);
 
   const pressControl = useCallback((code: string, pressed: boolean) => {
     if (pressed) keysRef.current.add(code);
@@ -1917,10 +2566,23 @@ export function ParkingGame() {
     window.localStorage.setItem("meter-mayhem-player-name", normalizedName);
     setStarting(true);
     shiftSessionRef.current = null;
+    const storedGhost = await loadPersonalBestGhost(dailyChallenge.id);
+    const matchingGhost = storedGhost?.rulesetVersion === DAILY_RULESET_VERSION
+      ? storedGhost
+      : null;
+    ghostRunRef.current = matchingGhost;
+    setGhostAvailable(Boolean(matchingGhost));
     try {
       const response = await fetchWithTimeout("/api/scores/session", {
         method: "POST",
-        headers: { Accept: "application/json" },
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          challengeId: dailyChallenge.id,
+          rulesetVersion: DAILY_RULESET_VERSION,
+        }),
       });
       if (!response.ok) throw new Error("Dispatch unavailable");
       const payload = (await response.json()) as { session?: ShiftSession };
@@ -1928,7 +2590,9 @@ export function ParkingGame() {
         !payload.session ||
         typeof payload.session.runId !== "string" ||
         typeof payload.session.issuedAt !== "number" ||
-        typeof payload.session.token !== "string"
+        typeof payload.session.token !== "string" ||
+        payload.session.challengeId !== dailyChallenge.id ||
+        payload.session.rulesetVersion !== DAILY_RULESET_VERSION
       ) {
         throw new Error("Invalid shift session");
       }
@@ -1941,9 +2605,20 @@ export function ParkingGame() {
     startRef.current?.();
   };
   const act = (kind: ActionKind) => actionsRef.current?.(kind);
+  const cityStyle = {
+    "--city-sky": colorToCss(city.palette.sky),
+    "--city-accent": colorToCss(city.palette.uiAccent),
+    "--city-deep": colorToCss(city.palette.uiDeep),
+    "--city-highlight": colorToCss(city.palette.uiHighlight),
+  } as CSSProperties;
 
   return (
-    <main className={styles.shell} data-screen={screen}>
+    <main
+      className={styles.shell}
+      data-screen={screen}
+      data-city={city.id}
+      style={cityStyle}
+    >
       <canvas ref={canvasRef} className={styles.canvas} aria-label="Colorful 3D city game view" />
       <div className={styles.sunGlow} />
 
@@ -1983,6 +2658,54 @@ export function ParkingGame() {
                 </p>
               </div>
             </div>
+            <section className={styles.dailyBriefing} data-testid="daily-dispatch">
+              <header>
+                <div>
+                  <span>Daily dispatch · {dailyChallenge.date}</span>
+                  <h2>{dailyChallenge.title}</h2>
+                </div>
+                <b>+{dailyChallenge.bonus}</b>
+              </header>
+              <p>{dailyChallenge.briefing}</p>
+              <div className={styles.briefingObjective}>
+                <span>Objective</span>
+                <strong>{dailyChallenge.objective.label}</strong>
+                <small>{dailyChallenge.objective.detail}</small>
+              </div>
+              <div className={styles.briefingIncident}>
+                <span>{dailyChallenge.incident.title}</span>
+                <small>Dispatch update at {dailyChallenge.incident.startsAtSeconds}s</small>
+              </div>
+              {ghostAvailable && (
+                <p className={styles.ghostReady}>Personal-best ghost ready for this patrol</p>
+              )}
+            </section>
+            <fieldset className={styles.cityPicker}>
+              <legend>
+                <span>Choose patrol city</span>
+                <small>Same streets and challenge</small>
+              </legend>
+              <div className={styles.cityOptions}>
+                {CITY_THEMES.map((choice) => (
+                  <button
+                    key={choice.id}
+                    type="button"
+                    className={cityId === choice.id ? styles.cityActive : ""}
+                    onClick={() => selectCity(choice.id)}
+                    aria-pressed={cityId === choice.id}
+                    data-testid={`city-${choice.id}`}
+                  >
+                    <span className={styles.citySwatches} aria-hidden="true">
+                      {choice.palette.buildings.slice(0, 3).map((color) => (
+                        <i key={color} style={{ backgroundColor: colorToCss(color) }} />
+                      ))}
+                    </span>
+                    <strong>{choice.name}</strong>
+                    <small>{choice.description}</small>
+                  </button>
+                ))}
+              </div>
+            </fieldset>
             <div className={styles.playerIdentity}>
               <label htmlFor="player-name">
                 <span>Officer name</span>
@@ -2003,8 +2726,8 @@ export function ParkingGame() {
                 />
               </label>
               <div>
-                <b>GLOBAL SCORES</b>
-                <small>Saved after each shift</small>
+                <b>DAILY SCORES</b>
+                <small>Ranked after a full shift</small>
               </div>
               {nameError && <p id="player-name-error" role="alert">{nameError}</p>}
             </div>
@@ -2035,7 +2758,9 @@ export function ParkingGame() {
             >
               {starting ? "Calling dispatch…" : "Help Officer Graham"} <span>→</span>
             </button>
-            <p className={styles.shiftNote}>90-second shift · Best score wins</p>
+            <p className={styles.shiftNote}>
+              {city.name} · {SHIFT_DURATION_SECONDS}-second shift · Same seeded challenge in every city
+            </p>
           </div>
 
           <aside className={styles.instructions} aria-label="How to play">
@@ -2048,7 +2773,7 @@ export function ParkingGame() {
                 <i>1</i>
                 <div>
                   <strong>Explore downtown</strong>
-                  <span>Move with the arrow keys. WASD remains available; hold Shift to run.</span>
+                  <span>Use arrows, WASD, touch, or a controller. Hold Shift, Run, or a bumper to sprint.</span>
                 </div>
               </li>
               <li>
@@ -2079,7 +2804,7 @@ export function ParkingGame() {
           <header className={styles.hud}>
             <div className={styles.brandMini}>
               <span className={styles.miniMark}>M</span>
-              <div><b>Meter Mayhem</b><small>Downtown patrol</small></div>
+              <div><b>Meter Mayhem</b><small>{city.name} patrol</small></div>
             </div>
             <div className={styles.hudStats}>
               <div><small>Score</small><strong data-testid="score">{stats.score.toLocaleString()}</strong></div>
@@ -2101,6 +2826,36 @@ export function ParkingGame() {
               <button onClick={() => endRef.current?.()} aria-label="End shift">×</button>
             </div>
           </header>
+
+          <section className={styles.objectiveCard} data-complete={objectiveStatus.complete}>
+            <div>
+              <span>Daily objective</span>
+              <strong>{dailyChallenge.objective.label}</strong>
+              <small>
+                {Math.floor(objectiveStatus.current)} / {objectiveStatus.target}
+                {objectiveStatus.complete ? ` · +${dailyChallenge.bonus} earned` : ""}
+              </small>
+            </div>
+            <div className={styles.objectiveProgress} aria-hidden="true">
+              <span style={{ width: `${objectiveStatus.progress * 100}%` }} />
+            </div>
+            <div className={styles.incidentStatus}>
+              <span>{dailyChallenge.incident.title}</span>
+              <small>
+                {SHIFT_DURATION_SECONDS - stats.timeLeft < dailyChallenge.incident.startsAtSeconds
+                  ? `Incoming in ${Math.ceil(
+                      dailyChallenge.incident.startsAtSeconds -
+                        (SHIFT_DURATION_SECONDS - stats.timeLeft),
+                    )}s`
+                  : SHIFT_DURATION_SECONDS - stats.timeLeft <
+                      dailyChallenge.incident.startsAtSeconds +
+                        dailyChallenge.incident.durationSeconds
+                    ? "Active now"
+                    : "Dispatch handled"}
+              </small>
+            </div>
+            {ghostAvailable && <b className={styles.ghostBadge}>PB GHOST</b>}
+          </section>
 
           {graphicsOpen && (
             <aside className={styles.graphicsDrawer} aria-label="Graphics settings">
@@ -2136,6 +2891,7 @@ export function ParkingGame() {
                   <span className={styles.statusDot} />
                   <div><small>Parking meter</small><strong>{formatMeter(context.seconds)}</strong></div>
                 </div>
+                {context.priority && <b className={styles.priorityBadge}>PRIORITY TARGET</b>}
                 {context.lookedUp && (
                   <div className={styles.record}>
                     <span>Plate record</span>
@@ -2169,7 +2925,11 @@ export function ParkingGame() {
             <div className={styles.keyGrid} aria-hidden="true">
               <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd>
             </div>
-            <span>Arrow keys move · Q W E act · Shift runs</span>
+            <span>
+              {controllerConnected
+                ? "Controller: stick moves · A tickets · X scans · B boots · bumper runs"
+                : "Arrow keys move · Q W E act · Shift runs"}
+            </span>
           </div>
 
           <div className={styles.touchControls} aria-label="Touch controls">
@@ -2179,24 +2939,35 @@ export function ParkingGame() {
                 onPointerDown={() => pressControl("KeyW", true)}
                 onPointerUp={() => pressControl("KeyW", false)}
                 onPointerCancel={() => pressControl("KeyW", false)}
+                onPointerLeave={() => pressControl("KeyW", false)}
               >↑</button>
+              <button
+                className={styles.touchRun}
+                onPointerDown={() => pressControl("ShiftLeft", true)}
+                onPointerUp={() => pressControl("ShiftLeft", false)}
+                onPointerCancel={() => pressControl("ShiftLeft", false)}
+                onPointerLeave={() => pressControl("ShiftLeft", false)}
+              >Run</button>
               <button
                 aria-label="Move left"
                 onPointerDown={() => pressControl("KeyA", true)}
                 onPointerUp={() => pressControl("KeyA", false)}
                 onPointerCancel={() => pressControl("KeyA", false)}
+                onPointerLeave={() => pressControl("KeyA", false)}
               >←</button>
               <button
                 aria-label="Move down"
                 onPointerDown={() => pressControl("KeyS", true)}
                 onPointerUp={() => pressControl("KeyS", false)}
                 onPointerCancel={() => pressControl("KeyS", false)}
+                onPointerLeave={() => pressControl("KeyS", false)}
               >↓</button>
               <button
                 aria-label="Move right"
                 onPointerDown={() => pressControl("KeyD", true)}
                 onPointerUp={() => pressControl("KeyD", false)}
                 onPointerCancel={() => pressControl("KeyD", false)}
+                onPointerLeave={() => pressControl("KeyD", false)}
               >→</button>
             </div>
             <div className={styles.touchActions}>
@@ -2216,22 +2987,42 @@ export function ParkingGame() {
           </div>
           <div className={styles.resultsWrap}>
             <div className={styles.resultCard}>
-              <p className={styles.eyebrow}>SHIFT COMPLETE</p>
+              <p className={styles.eyebrow}>
+                {city.name.toUpperCase()} {result.ranked ? "SHIFT COMPLETE" : "PRACTICE RESULT"}
+              </p>
               <h1>{resultTitle(result.score)}</h1>
-              <p className={styles.resultLead}>The block is safer, the meters are calmer, and your ticket book is considerably lighter.</p>
+              <p className={styles.resultLead}>
+                {result.ranked
+                  ? "The full patrol is logged. Dispatch has your final report."
+                  : result.rankedReason}
+              </p>
               <div className={styles.finalScore}>
                 <span>{playerName}&apos;s final score</span>
                 <strong data-testid="final-score">{result.score.toLocaleString()}</strong>
-                {result.score >= result.best && result.score > 0 && <b>NEW BEST!</b>}
+                {result.ranked && result.score >= result.best && result.score > 0 && <b>NEW BEST!</b>}
               </div>
               <div className={styles.resultStats}>
                 <div><strong>{result.tickets}</strong><span>Tickets</span></div>
                 <div><strong>{result.boots}</strong><span>Boots</span></div>
-                <div><strong>{result.best.toLocaleString()}</strong><span>Local best</span></div>
+                <div><strong>{result.best.toLocaleString()}</strong><span>Daily best</span></div>
               </div>
+              <div className={styles.objectiveResult} data-complete={result.objectiveCompleted}>
+                <div>
+                  <span>Daily objective</span>
+                  <strong>{dailyChallenge.objective.label}</strong>
+                </div>
+                <b>
+                  {result.objectiveCompleted
+                    ? `Complete · +${result.objectiveBonus}`
+                    : "Not completed"}
+                </b>
+              </div>
+              {result.ghostSaved && (
+                <p className={styles.ghostSaved}>New personal-best ghost saved for today.</p>
+              )}
               <div className={styles.scoreStatus} data-kind={scoreStatus.kind} aria-live="polite">
                 <span>{scoreStatus.message}</span>
-                {scoreStatus.kind === "error" && result.token && (
+                {scoreStatus.kind === "error" && result.token && result.ranked && (
                   <button onClick={() => void submitScore(result)}>Retry score</button>
                 )}
               </div>
@@ -2249,11 +3040,21 @@ export function ParkingGame() {
             <aside className={styles.leaderboard} aria-label="Global leaderboard">
               <header>
                 <div>
-                  <span>Citywide</span>
+                  <span>All patrol cities</span>
                   <h2>Top officers</h2>
                 </div>
-                <b>GLOBAL</b>
+                <b>{boardScope === "daily" ? "TODAY" : "ALL TIME"}</b>
               </header>
+              <div className={styles.boardTabs} aria-label="Leaderboard range">
+                <button
+                  data-active={boardScope === "daily"}
+                  onClick={() => setBoardScope("daily")}
+                >Today</button>
+                <button
+                  data-active={boardScope === "all"}
+                  onClick={() => setBoardScope("all")}
+                >All time</button>
+              </div>
               {scoresLoading && globalScores.length === 0 ? (
                 <p className={styles.boardMessage}>Calling dispatch…</p>
               ) : scoresError && globalScores.length === 0 ? (
@@ -2279,9 +3080,11 @@ export function ParkingGame() {
                   ))}
                 </ol>
               ) : (
-                <p className={styles.boardMessage}>No global scores yet. Take the first spot.</p>
+                <p className={styles.boardMessage}>
+                  No {boardScope === "daily" ? "daily" : "global"} scores yet. Take the first spot.
+                </p>
               )}
-              <button onClick={() => void refreshScores()}>Refresh scores</button>
+              <button onClick={() => void refreshScores(boardScope)}>Refresh scores</button>
             </aside>
           </div>
         </section>
