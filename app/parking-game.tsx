@@ -35,6 +35,8 @@ import { loadPersonalBestGhost, savePersonalBestGhost } from "./ghost-store";
 import styles from "./parking-game.module.css";
 import {
   nearestTrafficGap,
+  parkingRoutePosition,
+  parkingTravelDirection,
   TRAFFIC_BRAKE_DISTANCE,
   TRAFFIC_LOOP_MAX,
   TRAFFIC_LOOP_MIN,
@@ -42,6 +44,17 @@ import {
   type TrafficAxis,
   type TrafficVehiclePosition,
 } from "./traffic-collision";
+import {
+  OFFICER_COLLISION_RADIUS,
+  WorldCollisionIndex,
+  circleFitsWalkableArea,
+  circleIntersectsCollider,
+  createBuildingCollider,
+  createChunkSceneryColliders,
+  createFountainCollider,
+  createParkingMeterCollider,
+  createVehicleCollider,
+} from "./world-collision";
 
 type Screen = "loading" | "home" | "playing" | "gameover";
 type ActionKind = "ticket" | "lookup" | "boot";
@@ -764,6 +777,7 @@ export function ParkingGame() {
 
     const world = new THREE.Group();
     scene.add(world);
+    const worldCollision = new WorldCollisionIndex();
 
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(116, 150),
@@ -885,6 +899,7 @@ export function ParkingGame() {
     fountain.position.set(30, 0.14, 47);
     addShadow(fountain);
     world.add(fountain);
+    worldCollision.add(createFountainCollider("fountain", 30, 47));
 
     const animatedTrees: THREE.Group[] = [];
     const qualityDetails: THREE.Object3D[] = [];
@@ -963,6 +978,16 @@ export function ParkingGame() {
       addShadow(group);
       registerCameraOccluder(group);
       world.add(group);
+      worldCollision.add(
+        createBuildingCollider(
+          `district-building:${themeIndex}`,
+          x,
+          z,
+          width,
+          depth,
+          "district-buildings",
+        ),
+      );
     };
 
     [
@@ -1152,6 +1177,8 @@ export function ParkingGame() {
         if (qualityDetails.includes(object)) object.visible = profile.details;
       });
       world.add(chunk);
+      worldCollision.removeGroup(`chunk:${data.id}`);
+      worldCollision.addMany(createChunkSceneryColliders(data));
       loadedChunks.set(definition.id, chunk);
       loadingChunks.delete(definition.id);
       setStreamStatus(
@@ -1207,7 +1234,15 @@ export function ParkingGame() {
     world.add(motes);
 
     const spots: ParkingSpot[] = [];
+    let parkingMeterIndex = 0;
     const addParkingSpot = (axis: "x" | "z", side: number, along: number) => {
+      worldCollision.add(
+        createParkingMeterCollider(`parking-meter:${parkingMeterIndex++}`, {
+          axis,
+          side,
+          along,
+        }),
+      );
       if (axis === "z") {
         const meter = createMeter(side);
         meter.group.position.set(side * 7.4, 0.2, along + 2.3);
@@ -1534,61 +1569,111 @@ export function ParkingGame() {
     const officerClearsVehicle = (
       x: number,
       z: number,
-      position: THREE.Vector3,
+      position: { x: number; z: number },
       axis: TrafficAxis,
-    ) => {
-      const longitudinal = axis === "z" ? Math.abs(z - position.z) : Math.abs(x - position.x);
-      const lateral = axis === "z" ? Math.abs(x - position.x) : Math.abs(z - position.z);
-      return longitudinal >= 2.8 || lateral >= 1.55;
-    };
+      scale = 1,
+    ) => !circleIntersectsCollider(
+      x,
+      z,
+      OFFICER_COLLISION_RADIUS,
+      createVehicleCollider("candidate-vehicle", axis, position.x, position.z, scale),
+    );
 
     const canOfficerStandAt = (x: number, z: number) => {
-      if (!isWalkable(x, z)) return false;
-      for (const traffic of movingCars) {
-        if (!officerClearsVehicle(x, z, traffic.group.position, traffic.axis)) {
-          return false;
-        }
+      if (!circleFitsWalkableArea(x, z, OFFICER_COLLISION_RADIUS, isWalkable)) {
+        return false;
       }
+      const vehicleColliders = movingCars.map((traffic) =>
+        createVehicleCollider(
+          `traffic:${traffic.group.uuid}`,
+          traffic.axis,
+          traffic.group.position.x,
+          traffic.group.position.z,
+          traffic.group.scale.x,
+        ),
+      );
       for (const spot of spots) {
-        if (
-          spot.car &&
-          !officerClearsVehicle(x, z, spot.car.group.position, spot.axis)
-        ) {
-          return false;
-        }
+        if (!spot.car) continue;
+        vehicleColliders.push(
+          createVehicleCollider(
+            `parking:${spot.car.group.uuid}`,
+            spot.axis,
+            spot.car.group.position.x,
+            spot.car.group.position.z,
+            spot.car.group.scale.x,
+          ),
+        );
       }
-      return true;
+      return !worldCollision.blocksCircle(
+        x,
+        z,
+        OFFICER_COLLISION_RADIUS,
+        vehicleColliders,
+      );
     };
+
+    const vehiclePosition = (
+      group: THREE.Group,
+      axis: TrafficAxis,
+      x = group.position.x,
+      z = group.position.z,
+    ): TrafficVehiclePosition => ({
+      axis,
+      x,
+      z,
+      scale: group.scale.x,
+    });
 
     const trafficPosition = (
       traffic: MovingCar,
       nextCoordinate?: number,
-    ): TrafficVehiclePosition => ({
-      axis: traffic.axis,
-      x: traffic.axis === "x" && nextCoordinate !== undefined
+    ) => vehiclePosition(
+      traffic.group,
+      traffic.axis,
+      traffic.axis === "x" && nextCoordinate !== undefined
         ? nextCoordinate
         : traffic.group.position.x,
-      z: traffic.axis === "z" && nextCoordinate !== undefined
+      traffic.axis === "z" && nextCoordinate !== undefined
         ? nextCoordinate
         : traffic.group.position.z,
-    });
+    );
 
-    const shouldBrakeForTraffic = (traffic: MovingCar, direction: number) => {
-      const otherVehicles = movingCars
-        .filter((other) => other !== traffic)
-        .map((other) => trafficPosition(other));
-      return nearestTrafficGap(trafficPosition(traffic), direction, otherVehicles)
+    const allVehiclePositions = (excludedGroup?: THREE.Group) => {
+      const positions: TrafficVehiclePosition[] = [];
+      for (const traffic of movingCars) {
+        if (traffic.group === excludedGroup) continue;
+        positions.push(trafficPosition(traffic));
+      }
+      for (const spot of spots) {
+        const car = spot.car;
+        if (!car || car.group === excludedGroup) continue;
+        positions.push(vehiclePosition(car.group, spot.axis));
+      }
+      return positions;
+    };
+
+    const shouldBrakeForTraffic = (
+      group: THREE.Group,
+      position: TrafficVehiclePosition,
+      direction: number,
+    ) => {
+      return nearestTrafficGap(position, direction, allVehiclePositions(group))
         < TRAFFIC_BRAKE_DISTANCE;
     };
 
-    const trafficClearsVehicle = (traffic: MovingCar, nextCoordinate: number) => {
-      const nextPosition = trafficPosition(traffic, nextCoordinate);
-      return movingCars.every(
-        (other) =>
-          other === traffic ||
-          !trafficVehiclesOverlap(nextPosition, trafficPosition(other)),
+    const trafficPositionIsClear = (
+      nextPosition: TrafficVehiclePosition,
+      excludedGroup?: THREE.Group,
+    ) => {
+      return allVehiclePositions(excludedGroup).every(
+        (other) => !trafficVehiclesOverlap(nextPosition, other),
       );
     };
+
+    const trafficClearsVehicle = (
+      group: THREE.Group,
+      nextPosition: TrafficVehiclePosition,
+    ) => trafficPositionIsClear(nextPosition, group);
 
     const feedback = new GameFeedback();
     const playCue = (
@@ -1615,12 +1700,16 @@ export function ParkingGame() {
       const carColors = CITY_THEME_BY_ID[cityIdRef.current].palette.cars;
       const color = carColors[Math.floor(gameplayRandom() * carColors.length)];
       const group = createCar(color);
+      const routeStart = parkingRoutePosition(spot, "arriving", 0);
       group.position.set(
-        initial || spot.axis === "z" ? spot.x : -52,
+        initial ? spot.x : routeStart.x,
         0.08,
-        initial || spot.axis === "x" ? spot.z : -52,
+        initial ? spot.z : routeStart.z,
       );
-      group.rotation.y = spot.axis === "x" ? Math.PI / 2 : 0;
+      const direction = parkingTravelDirection(spot.side);
+      group.rotation.y = spot.axis === "x"
+        ? direction > 0 ? Math.PI / 2 : -Math.PI / 2
+        : direction > 0 ? 0 : Math.PI;
       world.add(group);
       const priorsPool = [0, 0, 1, 2, 3, 4, 5];
       const overdue = initial && gameplayRandom() < 0.46;
@@ -2230,7 +2319,11 @@ export function ParkingGame() {
           traffic.axis,
           direction,
         );
-        const brakingForTraffic = shouldBrakeForTraffic(traffic, direction);
+        const brakingForTraffic = shouldBrakeForTraffic(
+          traffic.group,
+          trafficPosition(traffic),
+          direction,
+        );
         const braking = brakingForOfficer || brakingForTraffic;
         traffic.speed = damp(
           traffic.speed,
@@ -2266,7 +2359,10 @@ export function ParkingGame() {
             traffic.axis,
             direction,
           );
-        const blockedByTraffic = !trafficClearsVehicle(traffic, nextCoordinate);
+        const blockedByTraffic = !trafficClearsVehicle(
+          traffic.group,
+          trafficPosition(traffic, nextCoordinate),
+        );
         if (blockedOnPath || blockedAtWrap || blockedByTraffic) {
           traffic.speed = 0;
         } else {
@@ -2363,35 +2459,62 @@ export function ParkingGame() {
         spots.forEach((spot) => {
           const car = spot.car;
           if (!car) {
-            const spawnX = spot.axis === "z" ? spot.x : -52;
-            const spawnZ = spot.axis === "x" ? spot.z : -52;
+            const spawnPosition = parkingRoutePosition(spot, "arriving", 0);
             if (
               gameTime >= spot.respawnAt &&
-              Math.hypot(officer.root.position.x - spawnX, officer.root.position.z - spawnZ) > 3.5
+              Math.hypot(
+                officer.root.position.x - spawnPosition.x,
+                officer.root.position.z - spawnPosition.z,
+              ) > 3.5 &&
+              trafficPositionIsClear({ ...spawnPosition, scale: 1 })
             ) {
               spawnCar(spot);
             }
             return;
           }
           if (car.phase === "arriving") {
-            const coordinate = spot.axis === "z" ? "z" : "x";
-            const destination = spot.axis === "z" ? spot.z : spot.x;
-            const duration = Math.max(2.2, Math.abs(destination + 52) / 7);
-            const braking = shouldBrakeForOfficer(car.group.position, spot.axis, 1);
+            const direction = parkingTravelDirection(spot.side);
+            const routeStart = parkingRoutePosition(spot, "arriving", 0);
+            const routeEnd = parkingRoutePosition(spot, "arriving", 1);
+            const startAlong = spot.axis === "z" ? routeStart.z : routeStart.x;
+            const endAlong = spot.axis === "z" ? routeEnd.z : routeEnd.x;
+            const duration = Math.max(2.2, Math.abs(endAlong - startAlong) / 7);
+            const currentPosition = vehiclePosition(car.group, spot.axis);
+            const brakingForOfficer = shouldBrakeForOfficer(
+              car.group.position,
+              spot.axis,
+              direction,
+            );
+            const brakingForTraffic = shouldBrakeForTraffic(
+              car.group,
+              currentPosition,
+              direction,
+            );
+            const braking = brakingForOfficer || brakingForTraffic;
             car.driveRate = damp(car.driveRate, braking ? 0 : 1, braking ? 8 : 2.5, dt);
             const nextPhaseTime = car.phaseTime + dt * car.driveRate;
             const progress = Math.min(1, nextPhaseTime / duration);
-            const eased = 1 - Math.pow(1 - progress, 3);
-            const nextCoordinate = THREE.MathUtils.lerp(-52, destination, eased);
+            const routePosition = parkingRoutePosition(spot, "arriving", progress);
+            const nextPosition = {
+              ...routePosition,
+              scale: car.group.scale.x,
+            };
             let reachedSpot = progress >= 1;
-            if (
-              officerBlocksVehiclePath(car.group.position, nextCoordinate, spot.axis, 1)
-            ) {
+            const blockedByOfficer = !officerClearsVehicle(
+              officer.root.position.x,
+              officer.root.position.z,
+              routePosition,
+              spot.axis,
+              car.group.scale.x,
+            );
+            const blockedByTraffic = !trafficClearsVehicle(car.group, nextPosition);
+            if (blockedByOfficer || blockedByTraffic) {
               car.driveRate = 0;
               reachedSpot = false;
             } else {
               car.phaseTime = nextPhaseTime;
-              car.group.position[coordinate] = nextCoordinate;
+              car.group.position.x = routePosition.x;
+              car.group.position.z = routePosition.z;
             }
             if (reachedSpot) {
               car.phase = "parked";
@@ -2407,24 +2530,48 @@ export function ParkingGame() {
               car.driveRate = 0;
             }
           } else {
-            const coordinate = spot.axis === "z" ? "z" : "x";
-            const origin = spot.axis === "z" ? spot.z : spot.x;
-            const duration = Math.max(2.4, Math.abs(52 - origin) / 7);
-            const braking = shouldBrakeForOfficer(car.group.position, spot.axis, 1);
+            const direction = parkingTravelDirection(spot.side);
+            const routeStart = parkingRoutePosition(spot, "leaving", 0);
+            const routeEnd = parkingRoutePosition(spot, "leaving", 1);
+            const startAlong = spot.axis === "z" ? routeStart.z : routeStart.x;
+            const endAlong = spot.axis === "z" ? routeEnd.z : routeEnd.x;
+            const duration = Math.max(2.4, Math.abs(endAlong - startAlong) / 7);
+            const currentPosition = vehiclePosition(car.group, spot.axis);
+            const brakingForOfficer = shouldBrakeForOfficer(
+              car.group.position,
+              spot.axis,
+              direction,
+            );
+            const brakingForTraffic = shouldBrakeForTraffic(
+              car.group,
+              currentPosition,
+              direction,
+            );
+            const braking = brakingForOfficer || brakingForTraffic;
             car.driveRate = damp(car.driveRate, braking ? 0 : 1, braking ? 8 : 2.5, dt);
             const nextPhaseTime = car.phaseTime + dt * car.driveRate;
             const progress = Math.min(1, nextPhaseTime / duration);
-            const eased = progress * progress;
-            const nextCoordinate = THREE.MathUtils.lerp(origin, 52, eased);
+            const routePosition = parkingRoutePosition(spot, "leaving", progress);
+            const nextPosition = {
+              ...routePosition,
+              scale: car.group.scale.x,
+            };
             let leftDistrict = progress >= 1;
-            if (
-              officerBlocksVehiclePath(car.group.position, nextCoordinate, spot.axis, 1)
-            ) {
+            const blockedByOfficer = !officerClearsVehicle(
+              officer.root.position.x,
+              officer.root.position.z,
+              routePosition,
+              spot.axis,
+              car.group.scale.x,
+            );
+            const blockedByTraffic = !trafficClearsVehicle(car.group, nextPosition);
+            if (blockedByOfficer || blockedByTraffic) {
               car.driveRate = 0;
               leftDistrict = false;
             } else {
               car.phaseTime = nextPhaseTime;
-              car.group.position[coordinate] = nextCoordinate;
+              car.group.position.x = routePosition.x;
+              car.group.position.z = routePosition.z;
             }
             if (leftDistrict) removeCar(spot);
           }
@@ -2527,6 +2674,7 @@ export function ParkingGame() {
       window.removeEventListener("blur", clearHeldInput);
       window.removeEventListener("pagehide", markInterrupted);
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      worldCollision.clear();
       renderer.dispose();
       scene.traverse((object) => {
         if (object instanceof THREE.Mesh) {

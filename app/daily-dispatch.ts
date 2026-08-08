@@ -1,4 +1,4 @@
-export const DAILY_RULESET_VERSION = 2;
+export const DAILY_RULESET_VERSION = 3;
 export const SHIFT_DURATION_SECONDS = 90;
 export const FIXED_STEP_SECONDS = 1 / 60;
 export const GHOST_RUN_VERSION = 1;
