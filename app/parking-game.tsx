@@ -505,6 +505,9 @@ export function ParkingGame() {
   const actionsRef = useRef<((kind: ActionKind) => void) | null>(null);
   const startRef = useRef<(() => void) | null>(null);
   const endRef = useRef<(() => void) | null>(null);
+  const startAttemptRef = useRef(false);
+  const briefingDialogRef = useRef<HTMLDialogElement>(null);
+  const briefingStartRef = useRef<HTMLButtonElement>(null);
   const gameActiveRef = useRef(false);
   const audioOnRef = useRef(true);
   const applyGraphicsRef = useRef<((mode: GraphicsMode) => void) | null>(null);
@@ -514,11 +517,14 @@ export function ParkingGame() {
   const submissionInFlightRef = useRef("");
   const shiftSessionRef = useRef<ShiftSession | null>(null);
   const ghostRunRef = useRef<GhostRun | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
   const [screen, setScreen] = useState<Screen>("loading");
   const [loadProgress, setLoadProgress] = useState(0);
   const [stats, setStats] = useState<Stats>(INITIAL_STATS);
   const [context, setContext] = useState<CarContext>(null);
-  const [toast, setToast] = useState("Find an expired meter");
+  const [toast, setToast] = useState<string | null>(null);
+  const [briefingOpen, setBriefingOpen] = useState(false);
+  const [objectiveOpen, setObjectiveOpen] = useState(false);
   const [result, setResult] = useState<GameResult>({
     runId: "",
     issuedAt: 0,
@@ -573,6 +579,39 @@ export function ParkingGame() {
   });
   const city = CITY_THEME_BY_ID[cityId];
   const globalScores = scoresByScope[boardScope];
+
+  const clearToast = useCallback(() => {
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    }
+    setToast(null);
+  }, []);
+
+  const showToast = useCallback((message: string, durationMs = 2_800) => {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+    setObjectiveOpen(false);
+    setToast(message);
+    toastTimerRef.current = window.setTimeout(() => {
+      toastTimerRef.current = null;
+      setToast(null);
+    }, durationMs);
+  }, []);
+
+  useEffect(() => () => {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    const dialog = briefingDialogRef.current;
+    if (!dialog) return;
+    if (briefingOpen && !dialog.open) {
+      dialog.showModal();
+      briefingStartRef.current?.focus();
+    } else if (!briefingOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [briefingOpen]);
 
   useEffect(() => {
     const saved = window.localStorage.getItem("meter-mayhem-graphics") as GraphicsMode | null;
@@ -1844,7 +1883,7 @@ export function ParkingGame() {
       if (completedNow) {
         objectiveAwarded = true;
         score += dailyChallenge.bonus;
-        setToast(`Dispatch objective complete +${dailyChallenge.bonus}`);
+        showToast(`Dispatch objective complete +${dailyChallenge.bonus}`, 4_500);
         playCue("objective");
         pushStats();
       }
@@ -2006,7 +2045,10 @@ export function ParkingGame() {
       pushStats();
       pushObjective(false);
       setContext(null);
-      setToast(dailyChallenge.objective.label);
+      clearToast();
+      setObjectiveOpen(false);
+      setBriefingOpen(false);
+      startAttemptRef.current = false;
       setLastSavedScore(null);
       setBoardScope("daily");
       setScoreStatus({
@@ -2045,7 +2087,7 @@ export function ParkingGame() {
 
     const doAction = (kind: ActionKind) => {
       if (!gameActiveRef.current || !nearest || nearestDistance > 3.75 || nearest.phase !== "parked") {
-        setToast("Move closer to a parked car");
+        showToast("Move closer to a parked car");
         playCue("error");
         return;
       }
@@ -2057,7 +2099,7 @@ export function ParkingGame() {
       actionTime = 0;
       if (kind === "lookup") {
         car.lookedUp = true;
-        setToast(car.priors >= 3 ? `${car.plate}: repeat offender — boot eligible` : `${car.plate}: ${car.priors} prior violations`);
+        showToast(car.priors >= 3 ? `${car.plate}: repeat offender — boot eligible` : `${car.plate}: ${car.priors} prior violations`);
         playCue("lookup", car.group.position);
         pushContext();
         return;
@@ -2065,12 +2107,12 @@ export function ParkingGame() {
 
       if (kind === "ticket") {
         if (car.ticketed) {
-          setToast("Already ticketed this parking stay");
+          showToast("Already ticketed this parking stay");
           playCue("error", car.group.position);
         } else if (car.expireAt > gameTime) {
           score = Math.max(0, score - 75);
           combo = 0;
-          setToast("Too early! −75");
+          showToast("Too early! −75");
           playCue("error", car.group.position);
         } else {
           combo = gameTime - lastTicketTime <= 12 ? combo + 1 : 1;
@@ -2085,7 +2127,7 @@ export function ParkingGame() {
           }
           car.ticketed = true;
           addTicketVisual(car);
-          setToast(combo > 1 ? `Valid ticket +${points} · ${combo}× combo!` : `Valid ticket +${points}`);
+          showToast(combo > 1 ? `Valid ticket +${points} · ${combo}× combo!` : `Valid ticket +${points}`);
           playCue("ticket", car.group.position);
           pushObjective();
         }
@@ -2093,25 +2135,25 @@ export function ParkingGame() {
 
       if (kind === "boot") {
         if (!car.lookedUp) {
-          setToast("Look up the plate first");
+          showToast("Look up the plate first");
           playCue("error", car.group.position);
         } else if (!car.ticketed) {
-          setToast("Write the expired-meter ticket first");
+          showToast("Write the expired-meter ticket first");
           playCue("error", car.group.position);
         } else if (car.priors < 3) {
           score = Math.max(0, score - 150);
           combo = 0;
-          setToast("Not a repeat offender! −150");
+          showToast("Not a repeat offender! −150");
           playCue("error", car.group.position);
         } else if (car.booted) {
-          setToast("This vehicle is already immobilized");
+          showToast("This vehicle is already immobilized");
         } else {
           car.booted = true;
           boots += 1;
           score += 250;
           objectiveMetrics.boots = boots;
           addBootVisual(car, spot);
-          setToast("Boot secured +250");
+          showToast("Boot secured +250");
           playCue("boot", car.group.position);
           pushObjective();
         }
@@ -2125,6 +2167,7 @@ export function ParkingGame() {
     endRef.current = () => finishGame(false);
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (!gameActiveRef.current) return;
       if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)) {
         event.preventDefault();
       }
@@ -2171,7 +2214,7 @@ export function ParkingGame() {
       if (!gameActiveRef.current) return;
       runRanked = false;
       rankedReason = "Practice result. Leaving this tab made the shift ineligible for ranking.";
-      setToast("Shift paused · this run is now practice");
+      showToast("Shift paused · this run is now practice", 4_500);
     };
     const onVisibilityChange = () => {
       if (document.hidden) markInterrupted();
@@ -2297,7 +2340,7 @@ export function ParkingGame() {
             incidentApplied = true;
             if (!incidentAnnounced) {
               incidentAnnounced = true;
-              setToast(dailyChallenge.incident.message);
+              showToast(dailyChallenge.incident.message, 5_000);
               playCue("incident");
             }
           }
@@ -2690,15 +2733,15 @@ export function ParkingGame() {
       applyGraphicsRef.current = null;
       applyCityRef.current = null;
     };
-  }, [dailyChallenge]);
+  }, [clearToast, dailyChallenge, showToast]);
 
   const pressControl = useCallback((code: string, pressed: boolean) => {
     if (pressed) keysRef.current.add(code);
     else keysRef.current.delete(code);
   }, []);
 
-  const start = async () => {
-    if (starting) return;
+  const requestBriefing = () => {
+    if (startAttemptRef.current || briefingOpen) return;
     const normalizedName = playerName.trim().replace(/\s+/g, " ");
     if (
       normalizedName.length < 2 ||
@@ -2712,15 +2755,28 @@ export function ParkingGame() {
     setNameError("");
     setPlayerName(normalizedName);
     window.localStorage.setItem("meter-mayhem-player-name", normalizedName);
+    clearToast();
+    setObjectiveOpen(false);
+    setBriefingOpen(true);
+  };
+
+  const cancelBriefing = () => {
+    if (startAttemptRef.current) return;
+    setBriefingOpen(false);
+  };
+
+  const start = async () => {
+    if (!briefingOpen || startAttemptRef.current) return;
+    startAttemptRef.current = true;
     setStarting(true);
     shiftSessionRef.current = null;
-    const storedGhost = await loadPersonalBestGhost(dailyChallenge.id);
-    const matchingGhost = storedGhost?.rulesetVersion === DAILY_RULESET_VERSION
-      ? storedGhost
-      : null;
-    ghostRunRef.current = matchingGhost;
-    setGhostAvailable(Boolean(matchingGhost));
     try {
+      const storedGhost = await loadPersonalBestGhost(dailyChallenge.id);
+      const matchingGhost = storedGhost?.rulesetVersion === DAILY_RULESET_VERSION
+        ? storedGhost
+        : null;
+      ghostRunRef.current = matchingGhost;
+      setGhostAvailable(Boolean(matchingGhost));
       const response = await fetchWithTimeout("/api/scores/session", {
         method: "POST",
         headers: {
@@ -2750,7 +2806,9 @@ export function ParkingGame() {
     } finally {
       setStarting(false);
     }
-    startRef.current?.();
+    const startGame = startRef.current;
+    if (startGame) startGame();
+    else startAttemptRef.current = false;
   };
   const act = (kind: ActionKind) => actionsRef.current?.(kind);
   const cityStyle = {
@@ -2900,11 +2958,10 @@ export function ParkingGame() {
             </div>
             <button
               className={styles.primaryButton}
-              onClick={() => void start()}
+              onClick={requestBriefing}
               data-testid="start-game"
-              disabled={starting}
             >
-              {starting ? "Calling dispatch…" : "Help Officer Graham"} <span>→</span>
+              Review shift briefing <span>→</span>
             </button>
             <p className={styles.shiftNote}>
               {city.name} · {SHIFT_DURATION_SECONDS}-second shift · Same seeded challenge in every city
@@ -2947,6 +3004,90 @@ export function ParkingGame() {
         </section>
       )}
 
+      <dialog
+        ref={briefingDialogRef}
+        className={styles.shiftBriefingDialog}
+        aria-labelledby="shift-briefing-title"
+        aria-describedby="shift-briefing-summary shift-briefing-timing"
+        data-testid="pre-shift-briefing"
+        onCancel={(event) => {
+          event.preventDefault();
+          cancelBriefing();
+        }}
+        onClose={() => {
+          if (briefingOpen) setBriefingOpen(false);
+        }}
+      >
+        <div className={styles.shiftBriefingCard}>
+          <header className={styles.shiftBriefingHeader}>
+            <div>
+              <span>Daily dispatch · {dailyChallenge.date}</span>
+              <h1 id="shift-briefing-title">{dailyChallenge.title}</h1>
+            </div>
+            <b>{city.name}</b>
+          </header>
+
+          <p id="shift-briefing-summary" className={styles.shiftBriefingSummary}>
+            {dailyChallenge.briefing}
+          </p>
+
+          <section className={styles.briefingMission} aria-labelledby="briefing-objective-title">
+            <div>
+              <span>Your objective</span>
+              <h2 id="briefing-objective-title">{dailyChallenge.objective.label}</h2>
+              <p>{dailyChallenge.objective.detail}</p>
+            </div>
+            <strong>+{dailyChallenge.bonus}<small>bonus points</small></strong>
+          </section>
+
+          <div className={styles.briefingDetails}>
+            <article>
+              <span>Dispatch event</span>
+              <h3>{dailyChallenge.incident.title}</h3>
+              <p>{dailyChallenge.incident.message}</p>
+              <small>
+                Starts {dailyChallenge.incident.startsAtSeconds}s into the shift
+                {dailyChallenge.incident.durationSeconds > 0
+                  ? ` · lasts ${dailyChallenge.incident.durationSeconds}s`
+                  : ""}
+              </small>
+            </article>
+            <article>
+              <span>Shift plan</span>
+              <h3>{SHIFT_DURATION_SECONDS} seconds on patrol</h3>
+              <p>Move with arrows, WASD, touch, or a controller. Scan plates before booting.</p>
+              <small>{ghostAvailable ? "Your personal-best ghost will join this run." : "Complete the full shift to rank."}</small>
+            </article>
+          </div>
+
+          <p id="shift-briefing-timing" className={styles.briefingTiming}>
+            The timer starts only after you press Start shift.
+          </p>
+
+          <div className={styles.briefingActions}>
+            <button
+              type="button"
+              className={styles.briefingBackButton}
+              onClick={cancelBriefing}
+              disabled={starting}
+            >
+              Back
+            </button>
+            <button
+              ref={briefingStartRef}
+              type="button"
+              className={styles.primaryButton}
+              onClick={() => void start()}
+              data-testid="confirm-shift"
+              disabled={starting}
+            >
+              {starting ? "Calling dispatch…" : `Start ${SHIFT_DURATION_SECONDS}-second shift`}
+              <span>→</span>
+            </button>
+          </div>
+        </div>
+      </dialog>
+
       {screen === "playing" && (
         <>
           <header className={styles.hud}>
@@ -2975,34 +3116,63 @@ export function ParkingGame() {
             </div>
           </header>
 
-          <section className={styles.objectiveCard} data-complete={objectiveStatus.complete}>
-            <div>
-              <span>Daily objective</span>
-              <strong>{dailyChallenge.objective.label}</strong>
-              <small>
+          <section
+            className={styles.objectiveDock}
+            data-complete={objectiveStatus.complete}
+            data-open={objectiveOpen}
+            data-testid="objective-reminder"
+          >
+            <button
+              type="button"
+              className={styles.objectiveSummary}
+              aria-expanded={objectiveOpen}
+              aria-controls="objective-details"
+              onClick={() => setObjectiveOpen((value) => !value)}
+              data-testid="objective-toggle"
+            >
+              <span className={styles.objectiveSummaryText}>
+                <small>{objectiveStatus.complete ? "Objective complete" : "Daily objective"}</small>
+                <strong>{dailyChallenge.objective.label}</strong>
+              </span>
+              <b className={styles.objectiveCount}>
                 {Math.floor(objectiveStatus.current)} / {objectiveStatus.target}
-                {objectiveStatus.complete ? ` · +${dailyChallenge.bonus} earned` : ""}
-              </small>
-            </div>
-            <div className={styles.objectiveProgress} aria-hidden="true">
+              </b>
+              <span className={styles.objectiveChevron} aria-hidden="true">⌄</span>
+            </button>
+            <div
+              className={styles.objectiveProgress}
+              role="progressbar"
+              aria-label="Daily objective progress"
+              aria-valuemin={0}
+              aria-valuemax={objectiveStatus.target}
+              aria-valuenow={Math.floor(objectiveStatus.current)}
+            >
               <span style={{ width: `${objectiveStatus.progress * 100}%` }} />
             </div>
-            <div className={styles.incidentStatus}>
-              <span>{dailyChallenge.incident.title}</span>
-              <small>
-                {SHIFT_DURATION_SECONDS - stats.timeLeft < dailyChallenge.incident.startsAtSeconds
-                  ? `Incoming in ${Math.ceil(
-                      dailyChallenge.incident.startsAtSeconds -
-                        (SHIFT_DURATION_SECONDS - stats.timeLeft),
-                    )}s`
-                  : SHIFT_DURATION_SECONDS - stats.timeLeft <
-                      dailyChallenge.incident.startsAtSeconds +
-                        dailyChallenge.incident.durationSeconds
-                    ? "Active now"
-                    : "Dispatch handled"}
-              </small>
+            <div
+              id="objective-details"
+              className={styles.objectiveDetails}
+              data-testid="objective-details"
+              hidden={!objectiveOpen}
+            >
+              <p>{dailyChallenge.objective.detail}</p>
+              <div className={styles.incidentStatus}>
+                <span>{dailyChallenge.incident.title}</span>
+                <small>
+                  {SHIFT_DURATION_SECONDS - stats.timeLeft < dailyChallenge.incident.startsAtSeconds
+                    ? `Incoming in ${Math.ceil(
+                        dailyChallenge.incident.startsAtSeconds -
+                          (SHIFT_DURATION_SECONDS - stats.timeLeft),
+                      )}s`
+                    : SHIFT_DURATION_SECONDS - stats.timeLeft <
+                        dailyChallenge.incident.startsAtSeconds +
+                          dailyChallenge.incident.durationSeconds
+                      ? "Active now"
+                      : "Dispatch handled"}
+                </small>
+              </div>
+              {ghostAvailable && <b className={styles.ghostBadge}>PB GHOST ACTIVE</b>}
             </div>
-            {ghostAvailable && <b className={styles.ghostBadge}>PB GHOST</b>}
           </section>
 
           {graphicsOpen && (
@@ -3026,7 +3196,7 @@ export function ParkingGame() {
             </aside>
           )}
 
-          <div className={styles.toast} aria-live="polite">{toast}</div>
+          {toast && <div className={styles.toast} role="status" aria-live="polite">{toast}</div>}
 
           <aside className={`${styles.vehiclePanel} ${context ? styles.vehiclePanelOpen : ""}`} aria-live="polite">
             {context ? (
@@ -3176,11 +3346,10 @@ export function ParkingGame() {
               </div>
               <button
                 className={styles.primaryButton}
-                onClick={() => void start()}
+                onClick={requestBriefing}
                 data-testid="play-again"
-                disabled={starting}
               >
-                {starting ? "Calling dispatch…" : "Patrol again"} <span>↻</span>
+                Review next patrol <span>↻</span>
               </button>
               <button className={styles.textButton} onClick={() => setScreen("home")}>Back to instructions</button>
             </div>

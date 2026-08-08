@@ -292,3 +292,39 @@ test("runs deterministic daily dispatches with fair traffic and local ghosts", a
   assert.match(feedback, /createPanner\(\)/);
   assert.match(feedback, /vibrationActuator/);
 });
+
+test("briefs the objective before starting and keeps gameplay reminders compact", async () => {
+  const game = await readFile(
+    new URL("app/parking-game.tsx", projectRoot),
+    "utf8",
+  );
+  const requestBriefingStart = game.indexOf("const requestBriefing = () => {");
+  const confirmShiftStart = game.indexOf("const start = async () => {");
+  const actionBridgeStart = game.indexOf("const act = (kind: ActionKind)");
+
+  assert.ok(requestBriefingStart >= 0);
+  assert.ok(confirmShiftStart > requestBriefingStart);
+  assert.ok(actionBridgeStart > confirmShiftStart);
+
+  const requestBriefing = game.slice(requestBriefingStart, confirmShiftStart);
+  const confirmShift = game.slice(confirmShiftStart, actionBridgeStart);
+  assert.doesNotMatch(requestBriefing, /fetchWithTimeout\("\/api\/scores\/session"/);
+  assert.match(requestBriefing, /setBriefingOpen\(true\)/);
+  assert.match(confirmShift, /startAttemptRef\.current = true/);
+  assert.match(confirmShift, /fetchWithTimeout\("\/api\/scores\/session"/);
+  assert.match(confirmShift, /if \(startGame\) startGame\(\)/);
+
+  assert.match(game, /data-testid="pre-shift-briefing"/);
+  assert.match(game, /aria-labelledby="shift-briefing-title"/);
+  assert.match(game, /The timer starts only after you press Start shift/);
+  assert.match(game, /data-testid="confirm-shift"/);
+  assert.match(game, /Review shift briefing/);
+  assert.match(game, /data-testid="objective-reminder"/);
+  assert.match(game, /data-testid="objective-toggle"/);
+  assert.match(game, /aria-expanded=\{objectiveOpen\}/);
+  assert.match(game, /aria-controls="objective-details"/);
+  assert.match(game, /role="progressbar"/);
+  assert.match(game, /hidden=\{!objectiveOpen\}/);
+  assert.match(game, /toast && <div className=\{styles\.toast\} role="status"/);
+  assert.doesNotMatch(game, /setToast\(dailyChallenge\.objective\.label\)/);
+});

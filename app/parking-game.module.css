@@ -322,6 +322,212 @@
   color: #c9fff4 !important;
 }
 
+.shiftBriefingDialog {
+  position: fixed;
+  inset: 0;
+  width: min(46rem, calc(100vw - 2rem));
+  max-width: none;
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 1.6rem;
+  background: transparent;
+  color: var(--ink);
+}
+
+.shiftBriefingDialog::backdrop {
+  background: rgba(12, 24, 37, 0.72);
+  backdrop-filter: blur(9px) saturate(0.8);
+}
+
+.shiftBriefingDialog[open] {
+  animation: briefingIn 180ms ease-out;
+}
+
+.shiftBriefingCard {
+  max-height: calc(100dvh - 2rem);
+  padding: clamp(1.15rem, 3vw, 2rem);
+  overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 1.6rem;
+  background:
+    radial-gradient(circle at 92% 2%, color-mix(in srgb, var(--city-highlight) 42%, transparent), transparent 27%),
+    #fff9ec;
+  box-shadow: 0 1.7rem 5rem rgba(8, 18, 30, 0.44);
+}
+
+.shiftBriefingHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.shiftBriefingHeader div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.shiftBriefingHeader span,
+.briefingMission span,
+.briefingDetails article > span {
+  color: #5746bf;
+  font-size: 0.62rem;
+  font-weight: 950;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.shiftBriefingHeader h1 {
+  margin: 0;
+  font-size: clamp(2rem, 6vw, 3.6rem);
+  line-height: 0.95;
+  letter-spacing: -0.055em;
+}
+
+.shiftBriefingHeader > b {
+  padding: 0.42rem 0.62rem;
+  border-radius: 999px;
+  background: var(--city-deep);
+  color: white;
+  font-size: 0.66rem;
+  white-space: nowrap;
+}
+
+.shiftBriefingSummary {
+  max-width: 60ch;
+  margin: 0.85rem 0 1rem;
+  color: #526174;
+  font: 750 0.9rem/1.5 "Trebuchet MS", sans-serif;
+}
+
+.briefingMission {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem 1.1rem;
+  border-radius: 1.15rem;
+  background: var(--city-deep);
+  color: white;
+  box-shadow: inset 0.3rem 0 0 var(--city-highlight);
+}
+
+.briefingMission > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.briefingMission span {
+  color: var(--city-highlight);
+}
+
+.briefingMission h2 {
+  margin: 0;
+  font-size: clamp(1.25rem, 3vw, 1.75rem);
+}
+
+.briefingMission p {
+  margin: 0.08rem 0 0;
+  color: rgba(255, 255, 255, 0.76);
+  font: 700 0.74rem/1.4 "Trebuchet MS", sans-serif;
+}
+
+.briefingMission > strong {
+  display: grid;
+  min-width: 5.5rem;
+  padding: 0.62rem 0.7rem;
+  border-radius: 0.9rem;
+  background: var(--yellow);
+  color: var(--ink);
+  font-size: 1.22rem;
+  text-align: center;
+}
+
+.briefingMission > strong small {
+  font-size: 0.52rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.briefingDetails {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.briefingDetails article {
+  display: grid;
+  gap: 0.22rem;
+  min-height: 8.1rem;
+  padding: 0.85rem;
+  border: 1px solid #ded8cb;
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.briefingDetails h3 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.briefingDetails p {
+  margin: 0;
+  color: #5d6b7c;
+  font: 700 0.69rem/1.4 "Trebuchet MS", sans-serif;
+}
+
+.briefingDetails small {
+  align-self: end;
+  color: #69788a;
+  font-size: 0.6rem;
+  font-weight: 850;
+}
+
+.briefingTiming {
+  margin: 0.9rem 0 0.75rem;
+  color: #5746bf;
+  font-size: 0.7rem;
+  font-weight: 900;
+  text-align: center;
+}
+
+.briefingActions {
+  display: grid;
+  grid-template-columns: minmax(7rem, 0.45fr) minmax(14rem, 1fr);
+  gap: 0.75rem;
+}
+
+.briefingActions .primaryButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+.briefingBackButton {
+  min-height: 4rem;
+  border: 2px solid #d8d1bd;
+  border-radius: 1.15rem;
+  background: white;
+  color: var(--ink);
+  font-size: 0.86rem;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.briefingBackButton:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.briefingBackButton:focus-visible {
+  outline-color: #5746bf;
+}
+
 .cityPicker {
   max-width: 39rem;
   margin: -0.45rem 0 1rem;
@@ -800,34 +1006,49 @@
   backdrop-filter: blur(10px);
 }
 
-.objectiveCard {
+.objectiveDock {
   position: absolute;
   top: 5.15rem;
-  left: 50%;
-  z-index: 7;
-  display: grid;
-  grid-template-columns: minmax(12rem, 1fr) minmax(7rem, 0.62fr) auto;
-  gap: 0.35rem 0.75rem;
-  align-items: center;
-  width: min(42rem, calc(100vw - 2rem));
-  padding: 0.58rem 0.72rem;
+  left: 1rem;
+  z-index: 9;
+  width: min(19rem, calc(100vw - 2rem));
+  overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.65);
   border-radius: 1rem;
-  transform: translateX(-50%);
-  background: rgba(23, 40, 59, 0.8);
+  background: rgba(23, 40, 59, 0.86);
   color: white;
   box-shadow: 0 0.65rem 1.8rem rgba(23, 40, 59, 0.2);
   backdrop-filter: blur(14px);
-  pointer-events: none;
+  pointer-events: auto;
 }
 
-.objectiveCard > div:first-child,
+.objectiveSummary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.55rem;
+  align-items: center;
+  width: 100%;
+  min-height: 3.55rem;
+  padding: 0.58rem 0.68rem 0.45rem;
+  border: 0;
+  background: transparent;
+  color: white;
+  text-align: left;
+  cursor: pointer;
+}
+
+.objectiveSummaryText,
 .incidentStatus {
   display: grid;
   gap: 0.08rem;
 }
 
-.objectiveCard span {
+.objectiveSummaryText {
+  min-width: 0;
+}
+
+.objectiveSummaryText small,
+.incidentStatus span {
   color: var(--city-highlight);
   font-size: 0.52rem;
   font-weight: 950;
@@ -835,24 +1056,43 @@
   text-transform: uppercase;
 }
 
-.objectiveCard strong {
+.objectiveSummaryText strong {
+  overflow: hidden;
+  font-size: 0.73rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.objectiveCount {
+  color: white;
   font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.objectiveCard small {
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 0.57rem;
-  font-weight: 750;
+.objectiveChevron {
+  color: var(--city-highlight);
+  font-size: 1.05rem;
+  line-height: 1;
+  transition: transform 160ms ease;
 }
 
-.objectiveCard[data-complete="true"] {
+.objectiveDock[data-open="true"] .objectiveChevron {
+  transform: rotate(180deg);
+}
+
+.objectiveDock[data-complete="true"] {
   box-shadow: inset 0 0 0 2px #48d6c8, 0 0.65rem 1.8rem rgba(23, 40, 59, 0.2);
 }
 
+.objectiveDock[data-complete="true"] .objectiveSummaryText small {
+  color: #bafff6;
+}
+
 .objectiveProgress {
-  grid-column: 1 / -1;
-  grid-row: 2;
   height: 0.28rem;
+  margin: 0 0.68rem 0.55rem;
   overflow: hidden;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.16);
@@ -866,16 +1106,42 @@
   transition: width 160ms ease;
 }
 
+.objectiveDetails {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.65rem 0.72rem 0.75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.objectiveDetails[hidden] {
+  display: none;
+}
+
+.objectiveDetails > p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.78);
+  font: 700 0.66rem/1.4 "Trebuchet MS", sans-serif;
+}
+
 .incidentStatus {
-  padding-left: 0.75rem;
-  border-left: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 0.52rem 0.6rem;
+  border-left: 0.2rem solid #ff8ca0;
+  border-radius: 0.45rem;
+  background: rgba(255, 140, 160, 0.1);
 }
 
 .incidentStatus span {
   color: #ffb6c1;
 }
 
+.incidentStatus small {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.58rem;
+  font-weight: 750;
+}
+
 .ghostBadge {
+  justify-self: start;
   padding: 0.32rem 0.45rem;
   border-radius: 999px;
   background: rgba(72, 214, 200, 0.2);
@@ -1611,6 +1877,11 @@
   50% { transform: translateY(-0.6rem) rotate(2deg); }
 }
 
+@keyframes briefingIn {
+  from { opacity: 0; transform: translateY(0.75rem) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
 @keyframes statusPulse {
   to { transform: scale(1.2); box-shadow: 0 0 0 0.42rem rgba(255, 255, 255, 0.45); }
 }
@@ -1764,7 +2035,7 @@
     padding-inline: 0.5rem;
   }
 
-  .objectiveCard {
+  .objectiveDock {
     top: 4.65rem;
   }
 
@@ -1791,6 +2062,74 @@
 @media (max-width: 620px), (pointer: coarse) {
   .shell {
     min-height: 480px;
+  }
+
+  .shiftBriefingDialog {
+    width: calc(100vw - 0.75rem);
+    max-height: calc(100dvh - 0.75rem);
+  }
+
+  .shiftBriefingCard {
+    max-height: calc(100dvh - 0.75rem);
+    padding: 1rem;
+    border-radius: 1.25rem;
+  }
+
+  .shiftBriefingHeader > b {
+    display: none;
+  }
+
+  .shiftBriefingHeader h1 {
+    font-size: clamp(2rem, 12vw, 3rem);
+  }
+
+  .shiftBriefingSummary {
+    margin-block: 0.65rem 0.75rem;
+    font-size: 0.8rem;
+  }
+
+  .briefingMission {
+    grid-template-columns: 1fr;
+    padding: 0.85rem;
+  }
+
+  .briefingMission > strong {
+    display: flex;
+    min-width: 0;
+    align-items: baseline;
+    justify-content: center;
+    gap: 0.35rem;
+  }
+
+  .briefingDetails {
+    grid-template-columns: 1fr;
+  }
+
+  .briefingDetails article {
+    min-height: 0;
+  }
+
+  .briefingActions {
+    position: sticky;
+    bottom: -1rem;
+    grid-template-columns: 0.42fr 1fr;
+    margin: 0 -0.25rem -1rem;
+    padding: 0.55rem 0.25rem 1rem;
+    background: linear-gradient(transparent, #fff9ec 24%);
+  }
+
+  .briefingActions .primaryButton,
+  .briefingBackButton {
+    min-height: 3.5rem;
+  }
+
+  .briefingActions .primaryButton {
+    padding-inline: 0.7rem;
+    font-size: 0.82rem;
+  }
+
+  .briefingActions .primaryButton span {
+    display: none;
   }
 
   .home {
@@ -1940,24 +2279,14 @@
     right: 0.5rem;
   }
 
-  .objectiveCard {
+  .objectiveDock {
     top: 3.35rem;
-    grid-template-columns: 1fr auto;
-    width: calc(100vw - 1rem);
-    padding: 0.48rem 0.58rem;
-  }
-
-  .objectiveCard .incidentStatus,
-  .ghostBadge {
-    display: none;
-  }
-
-  .objectiveProgress {
-    grid-column: 1 / -1;
+    left: max(0.5rem, env(safe-area-inset-left));
+    width: min(15rem, calc(100vw - 1rem));
   }
 
   .toast {
-    top: 7.15rem;
+    top: 8rem;
     max-width: 86vw;
     white-space: nowrap;
     overflow: hidden;
